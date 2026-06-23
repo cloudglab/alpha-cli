@@ -1,0 +1,9 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "command": {
+    "release": {
+      "description": "Release @cloudglab/alpha-cli with version bump, verification, tag, and optional GitHub Release checks.",
+      "template": "你现在要为 @cloudglab/alpha-cli 执行完整发布流程。必须严格遵守以下规则：\n\n## 发布责任边界\n- /release command 是当前项目的统一发布入口。\n- 先核对仓库现状，再决定是否继续；不要跳步，不要补脑不存在的工作流。\n- 如果仓库里不存在某个发布基础设施（例如 CHANGELOG.md、发布 workflow、npm 自动发布链路），必须明确说明并按“当前项目实际状态”执行，不能照搬别的项目。\n\n## 必须执行的固定顺序\n1. 检查发布前状态：git status、最近提交、当前 package.json 版本、src/version.ts 版本、最新 tag、gh auth status。\n2. 检查工作区是否存在未提交改动。若有改动，必须先确认这些改动就是本次发布内容；若掺杂无关改动，先停止并说明。\n3. 核对发布素材：README.md、CHANGELOG.md、.github/workflows/、package.json scripts。若 CHANGELOG.md 不存在，按当前仓库约定处理，不要强行套用其他项目流程。\n4. 更新 README.md：同步本次新增/变化的用户可见能力、命令示例或发布说明；仅在确有必要时改动。\n5. 如仓库已有 CHANGELOG.md，则补充本次版本记录；如没有，则不要凭空假设已有 changelog 流程，需明确说明是否本次一并创建。\n6. 提升 patch 版本：同步更新 package.json 与 src/version.ts。\n7. 运行验证：至少执行 pnpm typecheck、pnpm build；若存在 tests/devops-scene.test.ts，则执行 pnpm run test:scene；若后续发现新增的发布校验脚本，也一并执行。\n8. 复查发布结果：确认构建产物、版本号、命令帮助或本次改动涉及的关键路径没有明显异常。\n9. 提交代码：commit message 使用 feat/fix/docs/chore/release 中合适的一种，内容与本次发布一致。\n10. 创建 annotated tag：vX.Y.Z，message 为 Release vX.Y.Z。\n11. 推送当前分支和 tag。\n12. 如果当前仓库配置了 GitHub Release / npm publish 流程，则继续检查对应状态；如果没有，就明确说明当前项目只完成到 git/tag 发布，不要伪造不存在的检查步骤。\n13. 最后检查 git status --short，确保工作区干净。\n\n## 防 failure 规则\n- 不要跳过 git status、版本检查、验证命令。\n- 不要只改 package.json 而漏掉 src/version.ts。\n- 不要在未确认工作区内容的情况下直接 commit / tag / push。\n- 不要假设 alpha-cli 已经有 zentao-cli 那样的 CHANGELOG、smoke-query 或发布 workflow；必须以当前仓库真实文件为准。\n- 如果 gh auth、远端、权限、Actions、npm 发布条件任一缺失，先报告阻塞，再决定是否继续。\n\n## 输出要求\n- 请用 todowrite 跟踪每一步。\n- 所有 shell 命令使用非交互方式。\n- 最终用简短中文汇报版本、commit、tag、push 状态、是否创建 GitHub Release、是否验证 npm / workflow，以及任何阻塞或偏差。"
+    }
+  }
+}

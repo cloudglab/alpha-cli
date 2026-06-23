@@ -1,10 +1,11 @@
 import { z } from 'zod';
-import type { CliRegistry } from '../core/cli-registry.js';
+import type { CliCommandMetadata, CliRegistry } from '../core/cli-registry.js';
+import type { EndpointToolGroup } from '../core/roles.js';
 import { getApi } from '../core/api-provider.js';
-import { jsonResult } from './shared.js';
+import { jsonResult, withToolMeta } from './shared.js';
 
 export interface EndpointDefinition {
-  group: string;
+  group: EndpointToolGroup;
   name: string;
   method: 'GET' | 'POST';
   path: string;
@@ -18,17 +19,65 @@ const endpointSchema = {
   file: z.array(z.string()).optional().describe('multipart 文件路径，可重复传。'),
 };
 
-export function registerEndpointTools(server: CliRegistry, enabled: (group: string) => boolean): void {
+export function registerEndpointTools(server: CliRegistry, group?: EndpointToolGroup): void {
   for (const endpoint of ENDPOINTS) {
-    if (!enabled(endpoint.group)) continue;
+    if (group && endpoint.group !== group) continue;
+    const groupName = endpoint.group;
     server.tool(endpoint.name, endpointSchema, async ({ body, query, file }) => {
       const result = await getApi().request(endpoint.method, endpoint.path, {
         body: endpoint.mode === 'query' || endpoint.mode === 'none' ? undefined : body,
         query: endpoint.mode === 'body' || endpoint.mode === 'multipart' ? query : query ?? body,
         files: file,
       });
-      return jsonResult(result);
-    });
+      const decorated = withToolMeta(result, {
+        source: 'alpha-api',
+        command: endpoint.name,
+        method: endpoint.method,
+        path: endpoint.path,
+        mode: endpoint.mode ?? 'body',
+        group: groupName,
+      });
+      return jsonResult(decorated);
+    }, buildEndpointMetadata(endpoint));
+  }
+}
+
+export function findEndpointGroup(commandName: string): EndpointToolGroup | undefined {
+  return ENDPOINTS.find((endpoint) => endpoint.name === commandName)?.group;
+}
+
+const GROUP_RECOMMENDED_NEXT: Record<EndpointToolGroup, string[]> = {
+  root: ['healthHealthPing', 'userinfo', 'initAlpha'],
+  ci: ['ciBuildList', 'ciBuildGetLatest', 'ciInfoGetServerTime'],
+  deploy: ['deployAppsPage', 'deployClusterList', 'deployAppsViewHistory'],
+  file: ['fileMetadataPage', 'fileMetadataTypes', 'fileMetadataDownload'],
+  iter: ['iterVersionList', 'iterGetTree', 'iterHotfixList'],
+  rbac: ['rbacPrivilegeCurrentList', 'rbacRoleCurrentList'],
+};
+
+function buildEndpointMetadata(endpoint: EndpointDefinition): CliCommandMetadata {
+  const nextBestTools = (GROUP_RECOMMENDED_NEXT[endpoint.group] ?? []).filter((name) => name !== endpoint.name);
+  return {
+    group: endpoint.group,
+    description: `${endpoint.method} ${endpoint.path}`,
+    examples: [buildEndpointExample(endpoint)],
+    costHint: endpoint.mode === 'multipart' ? 'high' : endpoint.mode === 'none' ? 'low' : 'medium',
+    nextBestTools: nextBestTools.length > 0 ? nextBestTools : undefined,
+  };
+}
+
+function buildEndpointExample(endpoint: EndpointDefinition): string {
+  const prefix = `alpha ${endpoint.name}`;
+  switch (endpoint.mode) {
+    case 'query':
+      return `${prefix} --query '{"id":1}'`;
+    case 'multipart':
+      return `${prefix} --file ./example.bin`;
+    case 'none':
+      return prefix;
+    case 'body':
+    default:
+      return `${prefix} --body '{}'`;
   }
 }
 
