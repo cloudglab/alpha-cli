@@ -22,18 +22,27 @@ export ALPHA_PASSWORD="your-password"
 
 ```bash
 alpha list
+alpha list --raw                       # 仅输出命令名
+alpha help <command>                   # 查看命令参数
+alpha version
+alpha install / alpha update / alpha upgrade   # 安装或更新全局 CLI，打印 Banner
+alpha initAlpha --url https://host --token xxx --save true   # 写本地配置
+alpha getAlphaConfig                   # 查看当前配置
+alpha devopsScene --input https://host/main/devops/iteration/list   # 场景识别入口
+alpha healthHealthPing
 alpha userinfo
 alpha ciBuildGetLatest
 alpha ciBuildGetSelfBuild
 alpha iterGetTree
 alpha iterVersionList --body '{"page":1,"count":10}'
+alpha fileMetadataDownload --query '{"id":1}'
 ```
 
 ## 页面功能地图
 
 - `Devops > 集成`：构建、项目、流水线、统配规则。
 - `Devops > 迭代`：版本列表、产品/项目树、新建版本、查看/编辑、提测管理、封板、部署、hotfix 管理、删除。
-- `Devops > 部署`：环境部署、应用列表、云端 app、集群管理、地方环境、物料列表。
+- `Devops > 部署`：环境部署、应用列表、云端 app、Charts 部署、AZ 多云部署、集群管理、地方环境、物料列表、推包管理。
 
 ## 场景链路
 
@@ -50,9 +59,16 @@ alpha iterVersionList --body '{"page":1,"count":10}'
 
 ## 高危操作
 
-这些命令执行前必须二次确认：
+这些命令执行前必须二次确认。覆盖 9 类写场景，共 38 个命令：
 
-- 部署/重试/回滚/卸载：`deployProjectDeploy`、`deployProjectRetryDeploy`、`deployAppsRollback`、`deployAppsUninstall`。
-- 版本变更：`iterVersionAdd`、`iterVersionEdit`、`iterVersionDelete`、`iterVersionDisable`。
-- 构建动作：`ciBuildManualProcess`、`ciBuildFreedomBuild`、`ciBuildParamsBuild`、`ciBuildCancel`。
-- 配置和权限：`ciManageSetConfig`、`ciManageUpdateConfig`、`rbacRoleAssignRoles`、`rbacPrivilegeAssignPrivileges`。
+- **部署 / 重试 / 回滚 / 卸载**：`deployProjectDeploy`、`deployProjectRetryDeploy`、`deployProjectAzDeploy`、`deployProjectRetryAzDeploy`、`deployAppsInstall`、`deployAppsUpgrade`、`deployAppsAzDeploy`、`deployAppsImageVersion`、`deployAppsRollback`、`deployAppsUninstall`。
+- **版本变更**：`iterVersionAdd`、`iterVersionEdit`、`iterVersionDelete`、`iterVersionDisable`、`iterVersionMergeHis`。
+- **构建动作**：`ciBuildManualProcess`、`ciBuildFreedomBuild`、`ciBuildParamsBuild`、`ciBuildCancel`、`ciRepoAdd`。
+- **流水线治理**：`ciManageSetConfig`、`ciManageUpdateConfig`、`ciManageClearCache`、`ciManageResetVersion`、`ciManageSyncCiConfig`。
+- **集群管理**：`deployClusterAdd`、`deployClusterEdit`。
+- **物料**：`deployMaterialAdd`、`deployMaterialEdit`、`deployMaterialUpload`。
+- **推包**：`deployProjectPush`、`deployProjectFilePush`、`deployProjectPushGoon`。
+- **Hotfix**：`iterHotfixSave`、`iterHotfixMerge`。
+- **提测**：`iterVersionTestVersionSave`、`iterVersionTestVersionSubmit`。
+- **产品 / 项目管理**：`iterProdAdd`、`iterProjectAdd`、`iterProjectDelete`。
+- **权限**：`rbacRoleAssignRoles`、`rbacPrivilegeAssignPrivileges`。

@@ -8,6 +8,17 @@
 - 当前用户：`userinfo`。
 - 登录由 CLI 在配置了 `ALPHA_USERNAME` / `ALPHA_PASSWORD` 时自动完成，并复用服务端 `code` cookie。
 
+## 认证与会话
+
+页面：登录态、登出、UID 解析、连通测试。
+
+链路：
+
+1. `login --body '{"username":"xxx","password":"xxx"}'`：显式登录，危险操作。
+2. `logout`：登出，危险操作。
+3. `uid --body '{}'`：UID 解析。
+4. `testApi`：连通测试，验证 ALPHA_URL 是否可达。
+
 ## 构建看板
 
 页面：`Devops > 集成 > 构建`。
@@ -19,12 +30,15 @@
 3. `ciBuildGetLatest`：最新构建。
 4. `ciBuildGetSelfBuild`：我的构建。
 5. `ciBuildPopularList`：常用项目。
+6. `ciBuildList --body '{"page":1,"size":20}'`：构建列表（带分页/筛选）。
+7. `ciBuildFreedomTags`：自由度构建的可选 tag 列表。
 
 常用查询：
 
 ```bash
 alpha ciBuildGetLatest
 alpha ciBuildGetSelfBuild
+alpha ciBuildList --body '{"page":1,"size":20}'
 ```
 
 ## 项目构建
@@ -35,13 +49,18 @@ alpha ciBuildGetSelfBuild
 
 1. `ciRepoPage --body '{"page":1,"size":10,"name":"xxx"}'`：搜索项目。
 2. `ciRepoInfo --body '{"id":1734}'`：项目详情。
-3. `ciBranchList --body '{"repoId":1734}'`：分支列表。
-4. `ciBuildManualProcess --body '{...}'`：触发构建。
-5. `ciBuildGetBuild --body '{"buildId":371094}'`：构建详情。
-6. `ciInfoJenkinsOutput --body '{"buildId":371094,"stage":"xxx"}'`：Jenkins 输出。
-7. `ciBuildCancel --body '{"buildId":371094}'`：取消构建，危险操作。
+3. `ciRepoAdd --body '{...}'`：新增项目，危险操作。
+4. `ciRepoConfigDetail --body '{"repoId":1734,"branch":"main"}'`：仓库配置详情。
+5. `ciBranchList --body '{"repoId":1734}'`：分支列表。
+6. `ciBranchSearch --body '{...}'`：分支搜索（按 BuildReq）。
+7. `ciBuildManualProcess --body '{...}'`：触发构建。
+8. `ciBuildGetBuild --body '{"buildId":371094}'`：构建详情。
+9. `ciInfoJenkinsOutput --body '{"buildId":371094,"stage":"xxx"}'`：Jenkins 输出。
+10. `ciInfoChangeInfo --body '{...}'`：变更信息。
+11. `ciInfoGetRelCommit --body '{"buildId":371094}'`：关联 commit。
+12. `ciBuildCancel --body '{"buildId":371094}'`：取消构建，危险操作。
 
-写操作确认点：触发构建、取消构建。
+写操作确认点：新增项目、触发构建、取消构建。
 
 ## 流水线与统配规则
 
@@ -54,6 +73,7 @@ alpha ciBuildGetSelfBuild
 3. `ciManageGetConfig --body '{"repoId":1734}'`：仓库配置。
 4. `ciManageSetConfig` / `ciManageUpdateConfig`：设置或更新配置，危险操作。
 5. `ciManageClearCache` / `ciManageResetVersion` / `ciManageSyncCiConfig`：治理操作，危险操作。
+6. `ciAppSync --body '{...}'`：应用配置同步，危险操作。
 
 ## 迭代版本
 
@@ -65,10 +85,13 @@ alpha ciBuildGetSelfBuild
 2. `iterVersionList --body '{"page":1,"count":10}'`：版本列表。
 3. `iterVersionTagList`：迭代类型列表。
 4. `iterVersionDetail --body '{"versionId":123}'`：版本详情。
-5. `iterVersionAdd --body '{...}'`：新建版本，危险操作。
-6. `iterVersionEdit --body '{...}'`：编辑版本，危险操作。
-7. `iterVersionDisable --body '{"id":123}'`：封板，危险操作。
-8. `iterVersionDelete --body '{"versionId":123}'`：删除，危险操作。
+5. `iterVersionGetTree`：版本树（按 versionId）。
+6. `iterVersionGetRecentTestSubmitted`：最近提测记录。
+7. `iterVersionAdd --body '{...}'`：新建版本，危险操作。
+8. `iterVersionEdit --body '{...}'`：编辑版本，危险操作。
+9. `iterVersionDisable --body '{"id":123}'`：封板，危险操作。
+10. `iterVersionDelete --body '{"versionId":123}'`：删除，危险操作。
+11. `iterVersionMergeHis --body '{...}'`：合并版本历史，危险操作。
 
 新建版本最少需要关注字段：`prodId`、`projectId`、`version`、`tag`、`changeLog`。复杂版本还可能需要 `appList`、`azList`、`gflowList`、`udfList`、`config`、`apolloConfig`、`mysql`、`privilege` 等。
 
@@ -95,6 +118,29 @@ alpha ciBuildGetSelfBuild
 3. `iterHotfixSave --body '{...}'`：新增/编辑 hotfix，危险操作。
 4. `iterHotfixMerge --body '{"hotfixId":456,"action":"..."}'`：合并 hotfix，危险操作。
 
+## 产品 / 项目管理
+
+页面：`Devops > 迭代 > 产品/项目树` 顶部 `新增产品`、`新增项目`、`删除项目`。
+
+链路：
+
+1. `iterProdGetList`：产品列表。
+2. `iterProdAdd --body '{...}'`：新增产品，危险操作。
+3. `iterProjectGetList --body '{...}'`：项目列表。
+4. `iterProjectAdd --body '{...}'`：新增项目，危险操作。
+5. `iterProjectDelete --body '{...}'`：删除项目，危险操作。
+
+## 版本工具
+
+页面：版本详情内的 `资源URL切换` 工具与历史合并。
+
+链路：
+
+1. `iterVersionSwitchAz2resourceUrl --body '{...}'`：版本 az 资源 URL 切换。
+2. `iterVersionSwitchGflow2resourceUrl --body '{...}'`：版本 gflow 资源 URL 切换。
+3. `iterVersionSwitchEnvInit2resourceUrl --body '{...}'`：版本 env-init 资源 URL 切换。
+4. `iterVersionSwitchUdf2resourceUrl --body '{...}'`：版本 udf 资源 URL 切换。
+
 ## 环境部署
 
 页面：`Devops > 部署 > 环境部署`，也可从版本列表行内 `部署` 进入。
@@ -117,27 +163,35 @@ alpha ciBuildGetSelfBuild
 1. `deployAppsPage --body '{...}'`：应用分页。
 2. `deployAppsVersionList --body '{"appName":"xxx"}'`：应用版本列表。
 3. `deployAppsNsList --body '{"clusterId":1}'`：命名空间。
-4. `deployAppsDetailK8s --body '{...}'`：K8s 详情。
-5. `deployAppsLogUrl --body '{...}'`：日志 URL。
-6. `deployAppsBashUrl --body '{...}'`：终端 URL。
-7. `deployAppsInstall` / `deployAppsUpgrade` / `deployAppsImageVersion`：安装、升级、换镜像，危险操作。
-8. `deployAppsViewHistory --body '{"appId":1}'`：历史。
-9. `deployAppsRollback --body '{"appId":1,"historyId":2}'`：回滚，危险操作。
-10. `deployAppsUninstall --body '{"appId":1}'`：卸载，高危操作。
+4. `deployAppsRecentList --body '{...}'`：最近应用列表。
+5. `deployAppsViewK8s --body '{...}'`：K8s 视图。
+6. `deployAppsDetailK8s --body '{...}'`：K8s 详情。
+7. `deployAppsLogUrl --body '{...}'`：日志 URL。
+8. `deployAppsBashUrl --body '{...}'`：终端 URL。
+9. `deployAppsInstall` / `deployAppsUpgrade` / `deployAppsAzDeploy` / `deployAppsImageVersion`：安装、升级、AZ 部署、换镜像，危险操作。
+10. `deployAppsViewHistory --body '{"appId":1}'`：历史。
+11. `deployAppsRollback --body '{"appId":1,"historyId":2}'`：回滚，危险操作。
+12. `deployAppsUninstall --body '{"appId":1}'`：卸载，高危操作。
+13. `deployAppsSync --body '{...}'`：应用同步，危险操作。
+14. `deployAppsRefreshResource --body '{...}'`：刷新资源。
 
 ## 地方环境与推包
 
-页面：`Devops > 部署 > 地方环境`。
+页面：`Devops > 部署 > 地方环境`、`Devops > 部署 > 推包管理`。
 
 链路：
 
 1. `deployPushenvList`：地方环境列表。
 2. `deployPushenvPage --body '{...}'`：分页搜索。
-3. `deployProjectPush --body '{...}'`：推包，危险操作。
-4. `deployProjectFilePush --body '{...}'`：文件推送，危险操作。
-5. `deployProjectPushPage --body '{...}'`：推包历史。
-6. `deployProjectPushPageExpand --body '{...}'`：推包详情。
-7. `deployProjectPushGoon --body '{"id":1,"action":"..."}'`：继续/中止，危险操作。
+3. `deployPushenvAdd --body '{...}'`：新增地方环境，危险操作。
+4. `deployPushenvEdit --body '{...}'`：编辑地方环境，危险操作。
+5. `deployPushenvDetail --body '{...}'`：地方环境详情。
+6. `deployProjectPush --body '{...}'`：推包，危险操作。
+7. `deployProjectFilePush --body '{...}'`：文件推送，危险操作。
+8. `deployProjectPushList --body '{...}'`：推包记录。
+9. `deployProjectPushPage --body '{...}'`：推包历史。
+10. `deployProjectPushPageExpand --body '{...}'`：推包详情。
+11. `deployProjectPushGoon --body '{"id":1,"action":"..."}'`：继续/中止，危险操作。
 
 ## 集群管理
 
@@ -158,13 +212,40 @@ alpha ciBuildGetSelfBuild
 链路：
 
 1. `deployMaterialPage --body '{...}'`：物料分页。
-2. `deployMaterialDetail --body '{"id":1}'`：详情。
-3. `deployMaterialUpload --file ./pkg.zip`：上传物料，危险操作。
-4. `deployMaterialAdd` / `deployMaterialEdit`：新增/编辑物料，危险操作。
-5. `fileMetadataPage --body '{...}'`：文件元数据分页。
-6. `fileMetadataTypes`：文件类型。
-7. `fileMetadataDownload --query '{"id":1}'`：下载。
-8. `fileMetadataPreview --query '{"id":1}'`：预览。
+2. `deployMaterialList`：物料列表（全量）。
+3. `deployMaterialDetail --body '{"id":1}'`：详情。
+4. `deployMaterialUpload --file ./pkg.zip`：上传物料，危险操作。
+5. `deployMaterialAdd` / `deployMaterialEdit`：新增/编辑物料，危险操作。
+6. `deployMaterialSync`：物料同步，危险操作。
+7. `fileMetadataPage --body '{...}'`：文件元数据分页。
+8. `fileMetadataTypes`：文件类型。
+9. `fileMetadataDownload --query '{"id":1}'`：下载。
+10. `fileMetadataPreview --query '{"id":1}'`：预览。
+11. `fileMetadataAdd --file ./a.bin --body '{...}'`：上传文件，危险操作。
+
+## Charts 部署
+
+页面：`Devops > 部署 > Charts 部署`。
+
+链路：
+
+1. `deployChartsPage --body '{...}'`：Charts 分页。
+2. `deployChartsDetail --body '{...}'`：Chart 详情。
+3. `deployChartsVersion --body '{...}'`：Chart 版本。
+4. `deployChartsValues --body '{...}'`：Chart values。
+5. `deployChartsDeployStatus --body '{...}'`：Chart 部署状态。
+
+## AZ 多云部署
+
+页面：`Devops > 部署 > AZ 多云部署`。
+
+链路：
+
+1. `deployProjectAzProList --body '{...}'`：AZ 项目列表。
+2. `deployProjectAzUserList --body '{...}'`：AZ 用户列表。
+3. `deployProjectAzProjectAdd --body '{...}'`：AZ 项目新增，危险操作。
+4. `deployProjectAzDeploy --body '{...}'`：AZ 执行部署，危险操作。
+5. `deployProjectRetryAzDeploy --body '{...}'`：AZ 重试部署，危险操作。
 
 ## RBAC
 
