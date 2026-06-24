@@ -4,9 +4,6 @@ import type { JsonContentResult } from '../types/common.js';
 export type OutputMode = 'compact' | 'normal' | 'verbose';
 
 let currentOutputMode: OutputMode = 'compact';
-const PREVIEW_LIMIT = 20;
-const TEXT_TRUNCATE_LIMIT = 600;
-const PREVIEW_STRING_FIELDS = ['content', 'data', 'raw', 'html', 'text', 'message'];
 
 export const optionalTrimmedText = z.preprocess(
   (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
@@ -136,28 +133,7 @@ export async function runWithPreview<T>(
 }
 
 function normalizeCompactPayload(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.length <= PREVIEW_LIMIT ? value : { total: value.length, items: value.slice(0, PREVIEW_LIMIT) };
-  }
-
-  if (!isPlainObject(value)) return value;
-
-  const compact: Record<string, unknown> = {};
-  for (const [key, fieldValue] of Object.entries(value)) {
-    if (key === 'items' && Array.isArray(fieldValue)) {
-      compact.items = fieldValue.length <= PREVIEW_LIMIT ? fieldValue : fieldValue.slice(0, PREVIEW_LIMIT);
-      continue;
-    }
-
-    if (PREVIEW_STRING_FIELDS.includes(key) && typeof fieldValue === 'string' && fieldValue.length > TEXT_TRUNCATE_LIMIT) {
-      compact[key] = `${fieldValue.slice(0, TEXT_TRUNCATE_LIMIT)}…`;
-      continue;
-    }
-
-    compact[key] = fieldValue;
-  }
-
-  return compact;
+  return value;
 }
 
 function normalizeNormalPayload(value: unknown): unknown {

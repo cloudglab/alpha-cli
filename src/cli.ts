@@ -7,7 +7,7 @@ import type { Role } from './types/common.js';
 import { CLI_VERSION } from './version.js';
 import { type OutputMode, setGlobalOutputMode } from './tools/shared.js';
 
-const VALID_ROLES = new Set<Role>(['full', 'ci', 'deploy', 'iter', 'rbac', 'file']);
+const VALID_ROLES = new Set<Role>(['full', 'ci', 'deploy', 'iter', 'rbac', 'file', 'ops']);
 const VALID_OUTPUT_MODES = new Set<OutputMode>(['compact', 'normal', 'verbose']);
 const BUILTIN_COMMAND_NAMES = ['help', 'list', 'version', 'install', 'update', 'upgrade'];
 

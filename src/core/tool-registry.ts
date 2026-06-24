@@ -18,7 +18,11 @@ export const groupLoaders: Record<ToolGroup, GroupLoader> = {
   },
   ci: async () => {
     const { registerEndpointTools } = await import('../tools/endpoints.js');
-    return (server) => registerEndpointTools(server, 'ci');
+    const { registerCiOrchestratedTools } = await import('../tools/ci-orchestrated.js');
+    return (server) => {
+      registerEndpointTools(server, 'ci');
+      registerCiOrchestratedTools(server);
+    };
   },
   deploy: async () => {
     const { registerEndpointTools } = await import('../tools/endpoints.js');
@@ -36,6 +40,8 @@ export const groupLoaders: Record<ToolGroup, GroupLoader> = {
     const { registerEndpointTools } = await import('../tools/endpoints.js');
     return (server) => registerEndpointTools(server, 'rbac');
   },
+  ops: async () => (await import('../tools/ops.js')).registerOpsTools,
+  push: async () => (await import('../tools/push.js')).registerPushTools,
 };
 
 export async function registerTools(
@@ -79,6 +85,13 @@ async function resolveCommandGroup(commandName: string): Promise<ToolGroup | und
   if (commandName === 'devopsScene') {
     return 'scene';
   }
+
+  // 运维编排命令：opsPush / pushPkg 等自定义命令，不参与 endpoint 清单查询
+  const { OPS_COMMAND_NAMES, isOpsCommand } = await import('../tools/ops.js');
+  if (OPS_COMMAND_NAMES.includes(commandName) || isOpsCommand(commandName)) return 'ops';
+
+  const { PUSH_COMMAND_NAMES } = await import('../tools/push.js');
+  if (PUSH_COMMAND_NAMES.includes(commandName)) return 'push';
 
   const { findEndpointGroup } = await import('../tools/endpoints.js');
   return findEndpointGroup(commandName);

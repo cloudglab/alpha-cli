@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import type { AlphaConfig } from '../types/common.js';
+import type { AlphaConfig, OpsConfig } from '../types/common.js';
 
 const CONFIG_DIR = path.join(homedir(), '.alpha-cli');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -18,6 +18,9 @@ export function maskConfig(config: AlphaConfig): AlphaConfig {
     ...config,
     token: config.token ? '******' : undefined,
     password: config.password ? '******' : undefined,
+    sshUser: config.sshUser,
+    sshPass: config.sshPass ? '******' : undefined,
+    ops: config.ops,
   };
 }
 
@@ -29,16 +32,48 @@ export function normalizeConfig(config: Partial<AlphaConfig>): AlphaConfig {
     username: normalizeOptionalText(config.username),
     password: normalizeOptionalText(config.password),
     timeoutMs: normalizeTimeoutMs(config.timeoutMs) ?? 30_000,
+    ops: normalizeOpsConfig(config.ops),
+    // sshUser/sshPass 不落盘，仅从环境变量或运行时入参传入；normalize 时保留运行时入参
+    sshUser: normalizeOptionalText(config.sshUser),
+    sshPass: normalizeOptionalText(config.sshPass),
   };
 }
 
+function normalizeOpsConfig(ops: unknown): OpsConfig | undefined {
+  if (!isRecord(ops)) return undefined;
+  const cities = Array.isArray(ops.cities)
+    ? ops.cities.filter((item): item is string => typeof item === 'string' && item.trim() !== '')
+    : undefined;
+  const normalized: OpsConfig = {};
+  const bastionHost = normalizeOptionalText(ops.bastionHost);
+  if (bastionHost) normalized.bastionHost = bastionHost;
+  const targetServer = normalizeOptionalText(ops.targetServer);
+  if (targetServer) normalized.targetServer = targetServer;
+  const systemUserId = normalizeOptionalText(ops.systemUserId);
+  if (systemUserId) normalized.systemUserId = systemUserId;
+  const downloadDir = normalizeOptionalText(ops.downloadDir);
+  if (downloadDir) normalized.downloadDir = downloadDir;
+  const rsyncScript = normalizeOptionalText(ops.rsyncScript);
+  if (rsyncScript) normalized.rsyncScript = rsyncScript;
+  const rsyncBasePath = normalizeOptionalText(ops.rsyncBasePath);
+  if (rsyncBasePath) normalized.rsyncBasePath = rsyncBasePath;
+  const rsyncTargetBase = normalizeOptionalText(ops.rsyncTargetBase);
+  if (rsyncTargetBase) normalized.rsyncTargetBase = rsyncTargetBase;
+  if (cities && cities.length > 0) normalized.cities = cities;
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 export function loadConfig(): AlphaConfig | null {
-  const envConfig = {
+  const envConfig: Partial<AlphaConfig> = {
     url: normalizeOptionalEnvValue(process.env.ALPHA_URL),
     token: normalizeOptionalEnvValue(process.env.ALPHA_TOKEN),
     username: normalizeOptionalEnvValue(process.env.ALPHA_USERNAME) || normalizeOptionalEnvValue(process.env.ALPHA_ACCOUNT),
     password: normalizeOptionalEnvValue(process.env.ALPHA_PASSWORD),
     timeoutMs: parseOptionalTimeoutMs(process.env.ALPHA_TIMEOUT_MS),
+    // SSH 凭据只来自环境变量或运行时入参，不落 config.json
+    sshUser: normalizeOptionalEnvValue(process.env.ALPHA_SSH_USER),
+    sshPass: normalizeOptionalEnvValue(process.env.ALPHA_SSH_PASS),
+    ops: loadOpsEnvConfig(),
   };
 
   const hasAnyEnvOverride = Object.values(envConfig).some((value) => value !== undefined && value !== '');
@@ -50,10 +85,47 @@ export function loadConfig(): AlphaConfig | null {
   const raw = readConfigFile();
   if (!hasAnyEnvOverride) return normalizeConfig(raw);
 
-  return normalizeConfig({
+  const merged: Partial<AlphaConfig> = {
     ...raw,
-    ...Object.fromEntries(Object.entries(envConfig).filter(([, value]) => value !== undefined && value !== '')),
-  });
+    ...Object.fromEntries(
+      Object.entries(envConfig).filter(([, value]) => value !== undefined && value !== ''),
+    ),
+  };
+  // ops 段需要单独深合并：env 部分覆盖 config.json 的 ops 段，而非整体替换
+  if (raw.ops || envConfig.ops) {
+    merged.ops = mergeOpsConfig(raw.ops, envConfig.ops);
+  }
+  return normalizeConfig(merged);
+}
+
+/**
+ * 加载运维操作环境变量覆盖（ALPHA_OPS_*）。
+ */
+function loadOpsEnvConfig(): OpsConfig | undefined {
+  const ops: OpsConfig = {};
+  const bastionHost = normalizeOptionalEnvValue(process.env.ALPHA_OPS_BASTION);
+  if (bastionHost) ops.bastionHost = bastionHost;
+  const targetServer = normalizeOptionalEnvValue(process.env.ALPHA_OPS_TARGET);
+  if (targetServer) ops.targetServer = targetServer;
+  const systemUserId = normalizeOptionalEnvValue(process.env.ALPHA_OPS_SYSTEM_USER_ID);
+  if (systemUserId) ops.systemUserId = systemUserId;
+  const downloadDir = normalizeOptionalEnvValue(process.env.ALPHA_OPS_DOWNLOAD_DIR);
+  if (downloadDir) ops.downloadDir = downloadDir;
+  const rsyncScript = normalizeOptionalEnvValue(process.env.ALPHA_OPS_RSYNC_SCRIPT);
+  if (rsyncScript) ops.rsyncScript = rsyncScript;
+  const rsyncBasePath = normalizeOptionalEnvValue(process.env.ALPHA_OPS_RSYNC_BASE_PATH);
+  if (rsyncBasePath) ops.rsyncBasePath = rsyncBasePath;
+  const rsyncTargetBase = normalizeOptionalEnvValue(process.env.ALPHA_OPS_RSYNC_TARGET_BASE);
+  if (rsyncTargetBase) ops.rsyncTargetBase = rsyncTargetBase;
+  const cities = normalizeOptionalEnvValue(process.env.ALPHA_OPS_CITIES);
+  if (cities) ops.cities = cities.split(',').map((item) => item.trim()).filter(Boolean);
+  return Object.keys(ops).length > 0 ? ops : undefined;
+}
+
+function mergeOpsConfig(base: unknown, override: unknown): OpsConfig | undefined {
+  const baseOps = isRecord(base) ? base : {};
+  const overrideOps = isRecord(override) ? override : {};
+  return normalizeOpsConfig({ ...baseOps, ...overrideOps });
 }
 
 export function saveConfig(config: AlphaConfig): void {
