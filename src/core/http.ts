@@ -42,17 +42,31 @@ interface CacheEntry {
 
 export class AlphaHttpClient {
   private readonly client: AxiosInstance;
+  private readonly httpAgent: http.Agent;
+  private readonly httpsAgent: https.Agent;
   private cookieHeader?: string;
   private tokenBlacklist = new Set<string>();
   private readonly responseCache = new Map<string, CacheEntry>();
 
   constructor(private readonly config: AlphaConfig) {
+    this.httpAgent = new http.Agent({ keepAlive: true });
+    this.httpsAgent = new https.Agent({ keepAlive: true });
     this.client = axios.create({
       baseURL: config.url,
       timeout: config.timeoutMs,
-      httpAgent: new http.Agent({ keepAlive: true }),
-      httpsAgent: new https.Agent({ keepAlive: true }),
+      httpAgent: this.httpAgent,
+      httpsAgent: this.httpsAgent,
     });
+  }
+
+  /**
+   * 销毁底层 HTTP Agent，释放 keep-alive 连接。
+   * 长生命周期进程（如常驻脚本）应在不再使用时调用，避免连接泄漏。
+   */
+  close(): void {
+    this.httpAgent.destroy();
+    this.httpsAgent.destroy();
+    this.responseCache.clear();
   }
 
   async request<T = unknown>(method: string, url: string, options: AlphaRequestOptions = {}): Promise<T> {
@@ -103,7 +117,16 @@ export class AlphaHttpClient {
     } catch (error) {
       if (axios.isAxiosError(error)) {
         if (!retried && error.response?.status === 401) {
+          // 401 重试前必须清空缓存与登录态，否则重试会命中过期缓存/旧 cookie 而绕过重新鉴权。
           this.invalidateToken();
+          this.clearAuthAndCache();
+          // 纯 token 模式（无 username/password）：token 失效后无法重新登录，
+          // 重试一次必然再次 401，不如直接给出明确提示，避免静默失败。
+          if (!this.config.username || !this.config.password) {
+            throw buildAlphaHttpError(error, this.config, {
+              hint: 'Token 已过期且未配置账号密码，无法自动重新登录。请运行 `alpha initAlpha --token <new-token> --save true` 重置 token 后重试。',
+            });
+          }
           return this.requestWithRetry<T>(method, url, options, true);
         }
         if (!retried && isRetryableNetworkError(error)) {
@@ -141,6 +164,8 @@ export class AlphaHttpClient {
 
       this.captureCookie(response.headers['set-cookie']);
     } catch (error) {
+      // 登录失败时清空可能残留的 cookie，避免后续请求带半截失效 cookie 继续失败。
+      this.cookieHeader = undefined;
       if (axios.isAxiosError(error)) {
         throw buildAlphaLoginError(error, this.config);
       }
@@ -156,6 +181,15 @@ export class AlphaHttpClient {
 
   private invalidateToken(): void {
     if (this.config.token) this.tokenBlacklist.add(this.config.token);
+  }
+
+  /**
+   * 清空登录态（cookie）与 GET 响应缓存。
+   * 用于 401 重试路径，确保重试一定走真实网络与重新登录。
+   */
+  private clearAuthAndCache(): void {
+    this.cookieHeader = undefined;
+    this.responseCache.clear();
   }
 
   private getCacheKey(method: string, url: string, options: AlphaRequestOptions): string | undefined {
@@ -184,23 +218,28 @@ export class AlphaHttpClient {
     this.responseCache.set(key, { expiresAt: Date.now() + GET_CACHE_TTL_MS, value });
   }
 }
-
-export function buildAlphaHttpError(error: AxiosError, config: AlphaConfig): AlphaHttpError {
+export function buildAlphaHttpError(
+  error: AxiosError,
+  config: AlphaConfig,
+  override?: { hint?: string },
+): AlphaHttpError {
   const status = error.response?.status;
   const data = error.response?.data;
-  const responseText = describeResponseData(data, error.message);
   const url = `${config.url}${error.config?.url ?? ''}`;
 
   const classification = classifyError(status, error.code);
-  const hint = buildErrorHint(classification, status, config);
-  const baseMessage = `请求失败：HTTP ${status ?? 'NO_STATUS'} ${error.message}`;
+  // 错误消息只保留 status + 简短分类，responseBody 放在 error 对象上供程序消费，
+  // 避免把可能含敏感信息的响应体拼进 message 默认打印出来。
+  const baseMessage = `请求失败：HTTP ${status ?? 'NO_STATUS'} ${error.message}（${classification}）`;
 
-  const composed = new Error(`${baseMessage}。返回=${responseText}`) as AlphaHttpError;
+  const composed = new Error(baseMessage) as AlphaHttpError;
   composed.name = 'AlphaHttpError';
   composed.code = classification;
   composed.statusCode = status;
   composed.responseBody = data;
   composed.url = url;
+
+  const hint = override?.hint ?? buildErrorHint(classification, status, config);
   composed.hint = hint;
 
   if (hint) {
@@ -212,7 +251,6 @@ export function buildAlphaHttpError(error: AxiosError, config: AlphaConfig): Alp
 
 function buildAlphaLoginError(error: AxiosError, config: AlphaConfig): AlphaHttpError {
   const status = error.response?.status;
-  const responseText = describeResponseData(error.response?.data, error.message);
 
   if (status === 401 || status === 403) {
     const message = `登录失败：账号或密码错误，HTTP ${status}。`;
@@ -228,7 +266,7 @@ function buildAlphaLoginError(error: AxiosError, config: AlphaConfig): AlphaHttp
 
   if (status === 404) {
     const composed = new Error(
-      `登录失败：/alpha/login 接口不存在，当前地址可能不对。请检查 ALPHA_URL 或 alpha initAlpha 配置。HTTP 404，返回=${responseText}`,
+      '登录失败：/alpha/login 接口不存在，当前地址可能不对。请检查 ALPHA_URL 或 alpha initAlpha 配置。HTTP 404。',
     ) as AlphaHttpError;
     composed.name = 'AlphaHttpError';
     composed.code = 'endpoint-not-found';
@@ -239,7 +277,7 @@ function buildAlphaLoginError(error: AxiosError, config: AlphaConfig): AlphaHttp
   }
 
   if (typeof status === 'number' && status >= 500) {
-    const composed = new Error(`登录失败：Alpha 服务端异常，HTTP ${status}，返回=${responseText}`) as AlphaHttpError;
+    const composed = new Error(`登录失败：Alpha 服务端异常，HTTP ${status}。`) as AlphaHttpError;
     composed.name = 'AlphaHttpError';
     composed.code = 'server-error';
     composed.statusCode = status;
@@ -279,7 +317,7 @@ function buildErrorHint(code: AlphaHttpErrorCode, status: number | undefined, co
     case 'timeout':
       return `请求超时（${config.timeoutMs ?? 30_000}ms）。HTTP 层会针对 ECONNABORTED 自动重试一次；如再次失败，可使用 alpha initAlpha --timeoutMs <ms> --save true 调高超时。`;
     case 'bad-response':
-      return `服务端返回了未预期内容。返回内容前 ${RESPONSE_PREVIEW_LIMIT} 字已附在错误信息中，便于排查。`;
+      return `服务端返回了未预期内容。响应体已挂在 error.responseBody 上，可用 --output verbose 查看。`;
     default:
       return undefined;
   }
@@ -306,12 +344,24 @@ export function describeResponseData(data: unknown, fallback: string): string {
   }
 }
 
-function attachCacheMeta(value: unknown): unknown {
+/**
+ * 给缓存命中的响应附加 meta.cacheHit 标记。
+ * 返回浅拷贝，不修改缓存里存储的原始对象，避免污染只读语义。
+ * 对象响应会把 cacheHit 放进 meta；数组响应无法原地加 meta，保持原样（不标记 cacheHit），
+ * 由调用方在 withToolMeta 层统一处理。
+ */
+export function attachCacheMeta(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  const existingMeta = isPlainObject(record.meta) ? record.meta : {};
   return {
-    ...(value as Record<string, unknown>),
-    cacheHit: true,
+    ...record,
+    meta: { ...existingMeta, cacheHit: true },
   };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isRetryableNetworkError(error: { code?: string; message?: string }): boolean {

@@ -25,7 +25,7 @@ export ALPHA_TOKEN="your-token"
 pnpm dev initAlpha --url https://alpha.example.com --token your-token --save true
 ```
 
-配置文件位置：`~/.alpha-cli/config.json`。
+配置文件位置：`~/.alpha/config.json`（旧路径 `~/.alpha-cli/config.json` 仍可读，向后兼容）。
 
 ## 使用
 

@@ -18,16 +18,10 @@ interface SceneRule {
   note: string;
 }
 
-interface ActionRule {
-  routeKinds: string[];
-  keywords: string[];
-  routeKind: string;
-  primaryCommand: string | null;
-  suggestedCommands: string[];
-  note: string;
-}
-
-const ROUTE_RULES: SceneRule[] = [
+/**
+ * 路由规则表，导出供表驱动测试遍历，保证每条 pattern 至少能匹配一个示例 URL。
+ */
+export const ROUTE_RULES: SceneRule[] = [
   {
     pattern: /^\/iteration\/?$/,
     routeKind: 'iteration.list',
@@ -289,6 +283,15 @@ const ROUTE_RULES: SceneRule[] = [
     note: '项目详情页',
   },
 ];
+
+interface ActionRule {
+  routeKinds: string[];
+  keywords: string[];
+  routeKind: string;
+  primaryCommand: string | null;
+  suggestedCommands: string[];
+  note: string;
+}
 
 const ACTION_RULES: ActionRule[] = [
   {

@@ -119,29 +119,34 @@ function mergeWithEnv(raw: Partial<AlphaConfig>, envConfig: Partial<AlphaConfig>
 
 /**
  * 加载运维操作环境变量覆盖（ALPHA_OPS_*）。
+ * 导出供单元测试直接验证 env 解析，无需依赖 homedir/配置文件。
  */
-function loadOpsEnvConfig(): OpsConfig | undefined {
+export function loadOpsEnvConfig(env: Record<string, string | undefined> = process.env): OpsConfig | undefined {
   const ops: OpsConfig = {};
-  const bastionHost = normalizeOptionalEnvValue(process.env.ALPHA_OPS_BASTION);
+  const bastionHost = normalizeOptionalEnvValue(env.ALPHA_OPS_BASTION);
   if (bastionHost) ops.bastionHost = bastionHost;
-  const targetServer = normalizeOptionalEnvValue(process.env.ALPHA_OPS_TARGET);
+  const targetServer = normalizeOptionalEnvValue(env.ALPHA_OPS_TARGET);
   if (targetServer) ops.targetServer = targetServer;
-  const systemUserId = normalizeOptionalEnvValue(process.env.ALPHA_OPS_SYSTEM_USER_ID);
+  const systemUserId = normalizeOptionalEnvValue(env.ALPHA_OPS_SYSTEM_USER_ID);
   if (systemUserId) ops.systemUserId = systemUserId;
-  const downloadDir = normalizeOptionalEnvValue(process.env.ALPHA_OPS_DOWNLOAD_DIR);
+  const downloadDir = normalizeOptionalEnvValue(env.ALPHA_OPS_DOWNLOAD_DIR);
   if (downloadDir) ops.downloadDir = downloadDir;
-  const rsyncScript = normalizeOptionalEnvValue(process.env.ALPHA_OPS_RSYNC_SCRIPT);
+  const rsyncScript = normalizeOptionalEnvValue(env.ALPHA_OPS_RSYNC_SCRIPT);
   if (rsyncScript) ops.rsyncScript = rsyncScript;
-  const rsyncBasePath = normalizeOptionalEnvValue(process.env.ALPHA_OPS_RSYNC_BASE_PATH);
+  const rsyncBasePath = normalizeOptionalEnvValue(env.ALPHA_OPS_RSYNC_BASE_PATH);
   if (rsyncBasePath) ops.rsyncBasePath = rsyncBasePath;
-  const rsyncTargetBase = normalizeOptionalEnvValue(process.env.ALPHA_OPS_RSYNC_TARGET_BASE);
+  const rsyncTargetBase = normalizeOptionalEnvValue(env.ALPHA_OPS_RSYNC_TARGET_BASE);
   if (rsyncTargetBase) ops.rsyncTargetBase = rsyncTargetBase;
-  const cities = normalizeOptionalEnvValue(process.env.ALPHA_OPS_CITIES);
+  const cities = normalizeOptionalEnvValue(env.ALPHA_OPS_CITIES);
   if (cities) ops.cities = cities.split(',').map((item) => item.trim()).filter(Boolean);
   return Object.keys(ops).length > 0 ? ops : undefined;
 }
 
-function mergeOpsConfig(base: unknown, override: unknown): OpsConfig | undefined {
+/**
+ * 深合并两段 ops 配置：override 的字段覆盖 base，未覆盖的字段保留 base。
+ * 导出供单元测试直接验证合并语义，无需依赖 homedir/配置文件。
+ */
+export function mergeOpsConfig(base: unknown, override: unknown): OpsConfig | undefined {
   const baseOps = isRecord(base) ? base : {};
   const overrideOps = isRecord(override) ? override : {};
   return normalizeOpsConfig({ ...baseOps, ...overrideOps });

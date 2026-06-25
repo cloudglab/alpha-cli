@@ -11,10 +11,17 @@ export interface EndpointDefinition {
   path: string;
   request?: string;
   mode?: 'body' | 'query' | 'multipart' | 'none';
+  /**
+   * 显式标记该 endpoint 在服务端是只读查询（即便 method 为 POST）。
+   * true 表示无需 --confirm 即可调用；未标记则按 method + READ_ENDPOINT_NAMES 白名单判定。
+   * 白名单内容已与后端逐一确认只读，新增只读 POST 接口时建议在此标记 true 并补白名单。
+   */
+  readonly?: boolean;
 }
 
+// 部分 POST 接口在 Alpha 后端是只读查询（userinfo/uid/fileMetadataTypes 等），不强制 confirm。
+// 该白名单已与后端确认只读；新增只读 POST 接口时请同步维护，并在 EndpointDefinition.readonly 标记 true。
 const READ_ENDPOINT_NAMES: ReadonlySet<string> = new Set([
-  // 部分 POST 接口在 Alpha 后端是只读查询（userinfo/uid/fileMetadataTypes 等），不强制 confirm。
   'userinfo',
   'uid',
   'healthHealthPing',
@@ -95,6 +102,7 @@ function isWriteMethod(method: string): boolean {
 }
 
 function isWriteEndpoint(endpoint: EndpointDefinition): boolean {
+  if (endpoint.readonly === true) return false;
   if (!isWriteMethod(endpoint.method)) return false;
   if (READ_ENDPOINT_NAMES.has(endpoint.name)) return false;
   return true;
@@ -189,12 +197,12 @@ function buildEndpointExample(endpoint: EndpointDefinition): string {
 }
 
 export const ENDPOINTS: EndpointDefinition[] = [
-  { group: 'root', name: 'healthHealthPing', method: 'GET', path: '/health/health/ping', mode: 'none' },
+  { group: 'root', name: 'healthHealthPing', method: 'GET', path: '/health/health/ping', mode: 'none', readonly: true },
   { group: 'root', name: 'login', method: 'POST', path: '/alpha/login', request: 'LoginReq', mode: 'body' },
-  { group: 'root', name: 'userinfo', method: 'POST', path: '/alpha/userinfo', mode: 'none' },
-  { group: 'root', name: 'uid', method: 'POST', path: '/alpha/uid', request: 'JsonNode', mode: 'body' },
+  { group: 'root', name: 'userinfo', method: 'POST', path: '/alpha/userinfo', mode: 'none', readonly: true },
+  { group: 'root', name: 'uid', method: 'POST', path: '/alpha/uid', request: 'JsonNode', mode: 'body', readonly: true },
   { group: 'root', name: 'logout', method: 'POST', path: '/alpha/logout', mode: 'none' },
-  { group: 'root', name: 'testApi', method: 'GET', path: '/alpha/test-api', mode: 'none' },
+  { group: 'root', name: 'testApi', method: 'GET', path: '/alpha/test-api', mode: 'none', readonly: true },
   { group: 'ci', name: 'ciAppSync', method: 'POST', path: '/alpha/ci/app/sync', request: 'JsonNode', mode: 'body' },
   { group: 'ci', name: 'ciBranchList', method: 'POST', path: '/alpha/ci/branch/list', request: 'BranchReq', mode: 'body' },
   { group: 'ci', name: 'ciBranchSearch', method: 'POST', path: '/alpha/ci/branch/search', request: 'BuildReq', mode: 'body' },
@@ -283,8 +291,8 @@ export const ENDPOINTS: EndpointDefinition[] = [
   { group: 'deploy', name: 'deployPushenvDetail', method: 'POST', path: '/alpha/deploy/pushenv/detail', request: 'PushEnvReq', mode: 'body' },
   { group: 'file', name: 'fileMetadataPage', method: 'POST', path: '/alpha/file/metadata/page', request: 'FileMetadataReq', mode: 'body' },
   { group: 'file', name: 'fileMetadataTypes', method: 'POST', path: '/alpha/file/metadata/types', mode: 'none' },
-  { group: 'file', name: 'fileMetadataDownload', method: 'GET', path: '/alpha/file/metadata/download', request: 'FileDownloadReq', mode: 'query' },
-  { group: 'file', name: 'fileMetadataPreview', method: 'GET', path: '/alpha/file/metadata/preview', request: 'FilePreviewReq', mode: 'query' },
+  { group: 'file', name: 'fileMetadataDownload', method: 'GET', path: '/alpha/file/metadata/download', request: 'FileDownloadReq', mode: 'query', readonly: true },
+  { group: 'file', name: 'fileMetadataPreview', method: 'GET', path: '/alpha/file/metadata/preview', request: 'FilePreviewReq', mode: 'query', readonly: true },
   { group: 'file', name: 'fileMetadataAdd', method: 'POST', path: '/alpha/file/metadata/add', request: 'FileUploadReq', mode: 'multipart' },
   { group: 'iter', name: 'iterHotfixSave', method: 'POST', path: '/alpha/iter/hotfix/save', request: 'HotfixReq', mode: 'body' },
   { group: 'iter', name: 'iterHotfixList', method: 'POST', path: '/alpha/iter/hotfix/list', request: 'HotfixReq', mode: 'body' },

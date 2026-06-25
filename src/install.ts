@@ -629,20 +629,30 @@ function ask(rl: readline.Interface, label: string, defaultValue = ''): Promise<
   });
 }
 
+type MutableReadline = readline.Interface & { stdoutMuted?: boolean; _writeToOutput?: (value: string) => void };
+
 function askPassword(rl: readline.Interface, label: string): Promise<string> {
-  const mutableRl = rl as readline.Interface & { stdoutMuted?: boolean; _writeToOutput?: (value: string) => void };
-  return new Promise((resolve) => {
+  const mutableRl = rl as MutableReadline;
+  return new Promise((resolve, reject) => {
+    // _writeToOutput 是 Node readline 的内部钩子，跨版本可能不存在。
+    // 不存在时无法实现静默输入，直接拒绝并提示用环境变量，避免明文回显密码。
+    if (typeof mutableRl._writeToOutput !== 'function') {
+      reject(new Error('当前 Node 版本不支持密码静默输入，请改用环境变量 ALPHA_PASSWORD 提供密码后重试。'));
+      return;
+    }
+
+    const originalWrite = mutableRl._writeToOutput.bind(rl);
     mutableRl.stdoutMuted = true;
+    mutableRl._writeToOutput = (value: string) => {
+      originalWrite(mutableRl.stdoutMuted ? '*' : value);
+    };
+
     mutableRl.question(`${label}: `, (answer) => {
+      // finally 里还原钩子与静默标记
+      mutableRl._writeToOutput = originalWrite;
       mutableRl.stdoutMuted = false;
       process.stdout.write('\n');
       resolve(answer.trim());
     });
-
-    if (!mutableRl._writeToOutput) return;
-    const originalWrite = mutableRl._writeToOutput.bind(rl);
-    mutableRl._writeToOutput = (value: string) => {
-      originalWrite(mutableRl.stdoutMuted ? '*' : value);
-    };
   });
 }

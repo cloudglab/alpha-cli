@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { InMemoryCliRegistry } from '../src/core/cli-registry.js';
-import { normalizeImplicitSceneInvocation, parseDevopsScene } from '../src/core/devops-scene.js';
+import { normalizeImplicitSceneInvocation, parseDevopsScene, ROUTE_RULES } from '../src/core/devops-scene.js';
 import { registerTools } from '../src/core/tool-registry.js';
 
 test('parseDevopsScene recognizes iteration test create route', () => {
@@ -126,4 +126,70 @@ test('registerTools exposes devopsScene command in scene group', async () => {
   const command = registry.getCommand('devopsScene');
   assert.ok(command);
   assert.equal(command?.metadata?.group, 'scene');
+});
+
+// 表驱动测试：保证每条 ROUTE_RULES 的 pattern 至少匹配一个示例 URL，
+// 且该示例唯一映射回该 routeKind，避免长尾路由失配。
+const ROUTE_SAMPLES: Record<string, string> = {
+  'iteration.list': '/iteration',
+  'iteration.version.detail': '/iteration/version/detail/123',
+  'iteration.version.create': '/iteration/create/1/2',
+  'iteration.version.create.bi': '/iteration/createBI/1/2',
+  'iteration.version.edit': '/iteration/edit/1/2/3',
+  'iteration.version.edit.bi': '/iteration/editBI/1/2/3',
+  'iteration.test.create': '/iteration/test/123/create',
+  'iteration.test.edit': '/iteration/test/123/edit/456',
+  'iteration.test.list': '/iteration/test/123/1',
+  'iteration.hotfix.list': '/iteration/hotfix/123/list',
+  'iteration.hotfix.create': '/iteration/hotfix/123/create',
+  'iteration.hotfix.edit': '/iteration/hotfix/123/edit/456',
+  'arrange.ambient.list': '/arrange/ambient',
+  'arrange.ambient.create': '/arrange/ambient/create',
+  'arrange.chart.list': '/arrange/chart',
+  'arrange.chart.detail': '/arrange/chartArrange/7',
+  'arrange.cloudapp.list': '/arrange/cloudapp',
+  'arrange.cloudapp.detail': '/arrange/cloudapp/cloudAppDetail',
+  'arrange.cluster.list': '/arrange/cluster/list',
+  'arrange.local.list': '/arrange/local/list',
+  'arrange.material.list': '/arrange/material/list',
+  'integration.waterLine.list': '/integration/waterLine/list',
+  'integration.unificationRule.list': '/integration/unificationRule/list',
+  'integration.helmConfig.list': '/integration/helmConfig/list',
+  'integration.build.repo': '/integration/build/repo',
+  'integration.build.list': '/integration/build/list/42',
+  'integration.build.detail': '/integration/build/detail/42',
+  'integration.build.repoConfig': '/integration/build/repoConfig/42',
+  'integration.repo.list': '/integration/repo/list',
+  'integration.repo.detail': '/integration/repo/detail/42',
+};
+
+test('每条 ROUTE_RULES 都有对应示例 URL（无遗漏）', () => {
+  const missing = ROUTE_RULES
+    .map((rule) => rule.routeKind)
+    .filter((kind) => !(kind in ROUTE_SAMPLES));
+  assert.deepEqual(missing, [], `以下 routeKind 缺少示例 URL: ${missing.join(', ')}`);
+});
+
+for (const rule of ROUTE_RULES) {
+  test(`ROUTE_RULES pattern 匹配示例 URL: ${rule.routeKind}`, () => {
+    const sample = ROUTE_SAMPLES[rule.routeKind];
+    assert.ok(sample, `routeKind ${rule.routeKind} 缺少示例 URL`);
+    assert.ok(rule.pattern.test(sample), `pattern 未匹配示例: ${sample}`);
+
+    // 示例应唯一映射回该 routeKind（parseDevopsScene 取第一个命中规则）
+    const result = parseDevopsScene(sample);
+    assert.equal(
+      result.routeKind,
+      rule.routeKind,
+      `示例 ${sample} 期望 routeKind=${rule.routeKind}，实际=${result.routeKind}`,
+    );
+  });
+}
+
+test('每条 ROUTE_RULES 的 pattern/suggestedCommands 字段完整', () => {
+  for (const rule of ROUTE_RULES) {
+    assert.ok(rule.pattern instanceof RegExp, `routeKind=${rule.routeKind} 的 pattern 必须是 RegExp`);
+    assert.ok(typeof rule.routeKind === 'string' && rule.routeKind.length > 0);
+    assert.ok(Array.isArray(rule.suggestedCommands));
+  }
 });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import axios from 'axios';
 import type { CliRegistry } from '../core/cli-registry.js';
 import { getApi } from '../core/api-provider.js';
 import { opsPush, type OpsPushResult } from '../core/ssh.js';
@@ -11,14 +12,16 @@ const CHARTS_REPO_FALLBACK_ID = 494;
 const IMAGES_REPO_NAME = 'job-glab-pkg_images';
 const IMAGES_REPO_FALLBACK_ID = 210;
 const MASTER_BRANCH = 'master';
-const RELEASE_BASE_URL = 'http://devops.cloudglab.cn/release';
+// 发布产物服务器是公开静态资源，故意不走鉴权；允许通过环境变量覆盖默认地址。
+const RELEASE_BASE_URL = process.env.ALPHA_RELEASE_BASE_URL ?? 'http://devops.cloudglab.cn/release';
+// 公开静态资源下载的超时时间。
+const RELEASE_FETCH_TIMEOUT_MS = 30_000;
 
 interface RepoListItem {
   id?: number | string;
   name?: string;
   appName?: string;
   orgTag?: string;
-  [key: string]: unknown;
 }
 
 interface BuildListResponse {
@@ -36,20 +39,17 @@ interface BuildRecord {
   status?: string;
   commit?: string;
   createdTime?: number | string;
-  [key: string]: unknown;
 }
 
 interface ParamsBuildResponse {
   buildId?: number | string;
   id?: number | string;
-  [key: string]: unknown;
 }
 
 interface MaterialUploadResponse {
   fileId?: string;
   id?: string;
   url?: string;
-  [key: string]: unknown;
 }
 
 function pad2(n: number): string {
@@ -67,8 +67,30 @@ function formatTimestamp(date: Date, pattern: 'MMDDHHmm' | 'YYYYMMDDHHmm'): stri
   return `${date.getFullYear()}${month}${day}${hours}${minutes}`;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function createInterruptibleSleep(): { sleep: (ms: number) => Promise<void>; dispose: () => void } {
+  let interrupted = false;
+  let rejectPending: ((err: Error) => void) | null = null;
+  const onSigint = (): void => {
+    interrupted = true;
+    if (rejectPending) rejectPending(new Error('已取消：收到 SIGINT，轮询被用户中断。'));
+  };
+  process.once('SIGINT', onSigint);
+
+  return {
+    sleep(ms: number): Promise<void> {
+      if (interrupted) return Promise.reject(new Error('已取消：收到 SIGINT，轮询被用户中断。'));
+      return new Promise<void>((resolve, reject) => {
+        rejectPending = reject;
+        setTimeout(() => {
+          rejectPending = null;
+          resolve();
+        }, ms);
+      });
+    },
+    dispose(): void {
+      process.removeListener('SIGINT', onSigint);
+    },
+  };
 }
 
 async function waitForBuild(
@@ -81,31 +103,35 @@ async function waitForBuild(
 ): Promise<BuildRecord> {
   const deadline = Date.now() + timeoutSeconds * 1000;
   let attempt = 0;
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    attempt += 1;
-    const response = (await getApi().request('POST', '/alpha/ci/build/list', {
-      body: { repoId, branch, page: 1, count: 20 },
-    })) as BuildListResponse;
-    const list = Array.isArray(response?.list) ? response.list : [];
-    const target = list.find((item) => Number(item.id) === buildId);
+  const interrupter = createInterruptibleSleep();
+  try {
+    while (true) {
+      attempt += 1;
+      const response = (await getApi().request('POST', '/alpha/ci/build/list', {
+        body: { repoId, branch, page: 1, count: 20 },
+      })) as BuildListResponse;
+      const list = Array.isArray(response?.list) ? response.list : [];
+      const target = list.find((item) => Number(item.id) === buildId);
 
-    if (target) {
-      const status = typeof target.status === 'string' ? target.status : '';
-      onProgress?.(`[poll #${attempt}] buildId=${buildId} status=${status}`);
-      if (status === 'success') return target;
-      if (status === 'error' || status === 'failed') {
-        throw new Error(`构建失败: repoId=${repoId} branch=${branch} buildId=${buildId} status=${status}`);
+      if (target) {
+        const status = typeof target.status === 'string' ? target.status : '';
+        onProgress?.(`[poll #${attempt}] buildId=${buildId} status=${status}`);
+        if (status === 'success') return target;
+        if (status === 'error' || status === 'failed') {
+          throw new Error(`构建失败: repoId=${repoId} branch=${branch} buildId=${buildId} status=${status}`);
+        }
+      } else {
+        onProgress?.(`[poll #${attempt}] buildId=${buildId} 暂未出现，继续等待...`);
       }
-    } else {
-      onProgress?.(`[poll #${attempt}] buildId=${buildId} 暂未出现，继续等待...`);
-    }
 
-    if (Date.now() >= deadline) {
-      throw new Error(`等待构建超时(${timeoutSeconds}秒): repoId=${repoId} branch=${branch} buildId=${buildId}`);
-    }
+      if (Date.now() >= deadline) {
+        throw new Error(`等待构建超时(${timeoutSeconds}秒): repoId=${repoId} branch=${branch} buildId=${buildId}`);
+      }
 
-    await sleep(intervalSeconds * 1000);
+      await interrupter.sleep(intervalSeconds * 1000);
+    }
+  } finally {
+    interrupter.dispose();
   }
 }
 
@@ -176,8 +202,9 @@ async function buildCharts(
   const chartsImagesUrl = `${RELEASE_BASE_URL}/${CHARTS_REPO_NAME}/${simpleVersion}/images.txt`;
 
   onProgress?.(`[charts] 下载 images.txt: ${chartsImagesUrl}`);
-  const resp = await fetch(chartsImagesUrl);
-  const text = await resp.text();
+  // 该 URL 是公开静态资源，故意不走鉴权/重试；用 axios + timeout 避免无超时挂起。
+  const resp = await axios.get<string>(chartsImagesUrl, { timeout: RELEASE_FETCH_TIMEOUT_MS, responseType: 'text' });
+  const text = typeof resp.data === 'string' ? resp.data : String(resp.data ?? '');
   if (text.includes('404 Not Found')) {
     throw new Error(`构建失败: ${version}`);
   }

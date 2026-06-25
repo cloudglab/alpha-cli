@@ -126,16 +126,34 @@ function coerceValue(value: unknown, schema: ZodTypeAny): unknown {
     return parseJsonValue(value, '对象参数');
   }
   if (unwrapped instanceof z.ZodUnion) {
-    for (const option of unwrapped._def.options) {
-      try {
-        return coerceValue(value, option);
-      } catch {
-        // continue
-      }
+    // 不依赖私有字段 _def.options：对常见标量候选值逐个用 union 自身 safeParse 判定，
+    // 任一通过即采用其 parse 结果；全部失败则保留原值交由最终 z.object().parse() 抛错。
+    const candidates: unknown[] = [value];
+    if (typeof value === 'string') {
+      const asNumber = tryToNumber(value);
+      if (asNumber !== undefined) candidates.push(asNumber);
+      const asBool = tryToBoolean(value);
+      if (asBool !== undefined) candidates.push(asBool);
+    }
+    for (const candidate of candidates) {
+      const parsed = unwrapped.safeParse(candidate);
+      if (parsed.success) return parsed.data;
     }
     return value;
   }
   return value;
+}
+
+function tryToNumber(value: string): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function tryToBoolean(value: string): boolean | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false;
+  return undefined;
 }
 
 function parseJsonValue(value: string, label: string): unknown {

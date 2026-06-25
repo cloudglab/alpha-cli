@@ -1,5 +1,5 @@
 import { InMemoryCliRegistry, parseCommandInput } from './core/cli-registry.js';
-import { getBuiltinCommandHelp, printCommandHelp, printCommandList, printHelp } from './core/cli-output.js';
+import { formatCommandOutput, getBuiltinCommandHelp, printCommandHelp, printCommandList, printHelp } from './core/cli-output.js';
 import { normalizeImplicitSceneInvocation } from './core/devops-scene.js';
 import { runInstallCommand, runUninstallCommand, runUpdateCommand } from './install.js';
 import { registerTools } from './core/tool-registry.js';
@@ -136,7 +136,12 @@ export async function runCli(rawArgs: string[]): Promise<void> {
 
   const input = parseCommandInput(command.schema, commandArgs);
   const result = await command.handler(input);
-  const text = result.content[0]?.text ?? '';
+  const rawText = result.content[0]?.text ?? '';
+  // 仅在 compact 模式 + 交互式终端（TTY）下启用人类可读格式化；
+  // 管道/脚本/AI（非 TTY）以及 normal/verbose 模式保持原始 JSON，避免破坏 JSON 消费者。
+  const text = outputMode === 'compact' && process.stdout.isTTY
+    ? formatCommandOutput(command.name, rawText)
+    : rawText;
   process.stdout.write(`${text}\n`);
 }
 
@@ -154,6 +159,7 @@ function parseCliArgs(rawArgs: string[]): { role: Role; commandName?: string; co
   for (let index = 0; index < args.length;) {
     const arg = args[index];
 
+    // 统一用 --role / --role= / -r <value> 三种形式；不再支持 -r=value，避免重复分支。
     if (arg === '--role' || arg === '-r') {
       const roleValue = args[index + 1];
       if (!roleValue || !VALID_ROLES.has(roleValue as Role)) throw new Error(`无效 role: ${String(roleValue)}`);
@@ -162,8 +168,8 @@ function parseCliArgs(rawArgs: string[]): { role: Role; commandName?: string; co
       continue;
     }
 
-    if (arg.startsWith('--role=') || arg.startsWith('-r=')) {
-      const roleValue = arg.startsWith('--role=') ? arg.slice('--role='.length) : arg.slice('-r='.length);
+    if (arg.startsWith('--role=')) {
+      const roleValue = arg.slice('--role='.length);
       if (!roleValue || !VALID_ROLES.has(roleValue as Role)) throw new Error(`无效 role: ${String(roleValue)}`);
       role = roleValue as Role;
       args.splice(index, 1);

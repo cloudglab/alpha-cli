@@ -57,6 +57,28 @@ const RSYNC_CHECK_INTERVAL_MS = 1000;
 const CONNECT_READY_TIMEOUT_MS = 30_000;
 const KEEPALIVE_INTERVAL_MS = 10_000;
 
+/**
+ * buffer 软上限：超过 BUFFER_MAX_BYTES 时只保留尾部 BUFFER_KEEP_BYTES，
+ * 防止 rsync 长轮询期间 buffer 无限增长；正常短会话不会触发。
+ */
+const BUFFER_MAX_BYTES = 32_768;
+const BUFFER_KEEP_BYTES = 16_384;
+
+/**
+ * PTY echo 会把 `echo "MARKER"` 这类命令原文回显进 buffer，导致 `includes('MARKER')`
+ * 在命令回显阶段就命中。这里用行锚定正则只匹配 echo 的「输出行」（独占一行的 MARKER），
+ * 避免命令回显造成误命中。
+ */
+const RE_LOGIN_SUCCESS = /^\s*LOGIN_SUCCESS\s*$/m;
+const RE_DOWNLOAD_FINISHED = /^\s*DOWNLOAD_FINISHED\s*$/m;
+const RE_DOWNLOAD_FAILED = /^\s*DOWNLOAD_FAILED\s*$/m;
+const RE_TAR_COMPLETED = /^\s*TAR_COMPLETED\s*$/m;
+const RE_TAR_FAILED = /^\s*TAR_FAILED\s*$/m;
+const RE_FILE_TRANSFERRED = /^\s*FILE_TRANSFERRED\s*$/m;
+
+/** pkgName/city 来自 CLI 入参，必须严格白名单，防注入。 */
+const SIMPLE_NAME_RE = /^[A-Za-z0-9._-]+$/;
+
 type LoginStatus = 'pending' | 'connecting' | 'waiting' | 'success' | 'failed' | 'finished' | undefined;
 type DownloadStatus = 'started' | 'success' | 'failed' | 'process' | 'retrying' | undefined;
 type TarStatus = 'started' | 'success' | 'failed' | 'process' | undefined;
@@ -118,6 +140,18 @@ export function shellEscape(value: string): string {
 }
 
 /**
+ * 校验来自 CLI 入参的简单标识符（pkgName/city 等），仅允许字母、数字、点、下划线、连字符。
+ * 这些值会同时进入交互输入与 shell 命令，白名单是最直接的防注入手段。
+ */
+export function assertSimpleName(value: string, label: string): void {
+  if (!SIMPLE_NAME_RE.test(value)) {
+    throw new Error(
+      `${label} 含非法字符，仅允许字母、数字、点、下划线、连字符（^[A-Za-z0-9._-]+$），收到: ${value}`,
+    );
+  }
+}
+
+/**
  * 登录堡垒机并推送到目标机：登录 → wget 下载 → tar 打包 → rsync 选城市推送 → 检测文件到位。
  * 复刻 one-shot 01.push-pkg.ts 的 pushPackages / handleSSHStream PTY 状态机。
  */
@@ -129,6 +163,10 @@ export function opsPush(options: OpsPushOptions): Promise<OpsPushResult> {
   if (!resolvedOps.targetServer) throw new Error('缺少目标服务器地址，请配置 ops.targetServer');
   if (!resolvedOps.systemUserId) throw new Error('缺少系统用户ID，请配置 ops.systemUserId');
   if (options.urls.length === 0) throw new Error('没有可下载的文件 URL');
+
+  // pkgName/city 来自 CLI 入参，会进入交互输入与 shell 命令，必须白名单校验防注入。
+  assertSimpleName(options.pkgName, 'pkgName');
+  assertSimpleName(options.city, 'city');
 
   const onProgress = options.onProgress ?? (() => {});
 
@@ -171,7 +209,12 @@ export function opsPush(options: OpsPushOptions): Promise<OpsPushResult> {
         }
         onProgress('正在建立链接...');
         stream.on('data', (data: Buffer) => {
-          state.buffer = data.toString();
+          // 累积而非覆盖：SSH PTY 输出常跨 chunk，覆盖会导致跨 chunk 的 marker 永不匹配。
+          state.buffer += data.toString();
+          // 软上限：长会话（如 rsync 轮询）下防止 buffer 无限增长；保留尾部足够上下文。
+          if (state.buffer.length > BUFFER_MAX_BYTES) {
+            state.buffer = state.buffer.slice(-BUFFER_KEEP_BYTES);
+          }
           handleStream(stream, state, options, resolvedOps, stages, onProgress, done, fail);
         });
         stream.stderr.on('data', (data: Buffer) => {
@@ -306,16 +349,17 @@ function handleLoginPhase(
   if (
     state.loginStatus === 'waiting'
     && (state.buffer.match(/\[dev@.*\]/) || state.buffer.includes('ga-transform'))
-    && state.buffer.includes('LOGIN_SUCCESS')
+    && RE_LOGIN_SUCCESS.test(state.buffer)
   ) {
     state.loginStatus = 'success';
     onProgress(`成功登录到 ${ops.targetServer} 服务器`);
     onLoginSuccess();
     onProgress('创建下载目录');
     void options; // options 预留
-    stream.write(`mkdir -p ${ops.downloadDir}\r`);
-    stream.write(`rm -r ${ops.downloadDir}/*\r`);
-    stream.write(`cd ${ops.downloadDir}\r`);
+    const dlDir = shellEscape(ops.downloadDir);
+    stream.write(`mkdir -p ${dlDir}\r`);
+    stream.write(`rm -r ${dlDir}/*\r`);
+    stream.write(`cd ${dlDir}\r`);
     return;
   }
 
@@ -370,16 +414,17 @@ function handleDownloadPhase(
 
   if (
     state.downloadStatus === 'process'
-    && state.buffer.includes('DOWNLOAD_FAILED')
-    && !state.buffer.includes('DOWNLOAD_FINISHED')
+    && RE_DOWNLOAD_FAILED.test(state.buffer)
+    && !RE_DOWNLOAD_FINISHED.test(state.buffer)
   ) {
     state.downloadRetryCount = state.downloadRetryCount || 0;
     if (state.downloadRetryCount < DOWNLOAD_MAX_RETRY) {
       state.downloadRetryCount += 1;
       state.downloadStatus = 'retrying';
       onProgress(`文件下载失败，正在重试 (${state.downloadRetryCount}/${DOWNLOAD_MAX_RETRY})`);
+      const dlDir = shellEscape(ops.downloadDir);
       setTimeout(() => {
-        stream.write(`cd ${ops.downloadDir} && rm -f *.tmp* *.part*\r`);
+        stream.write(`cd ${dlDir} && rm -f *.tmp* *.part*\r`);
         setTimeout(() => {
           onProgress(`重新下载文件 (尝试 ${state.downloadRetryCount}/${DOWNLOAD_MAX_RETRY})...`);
           stream.write(`${downloadCommand}\r`);
@@ -395,8 +440,8 @@ function handleDownloadPhase(
 
   if (
     state.downloadStatus === 'process'
-    && state.buffer.includes('DOWNLOAD_FINISHED')
-    && !state.buffer.includes('DOWNLOAD_FAILED')
+    && RE_DOWNLOAD_FINISHED.test(state.buffer)
+    && !RE_DOWNLOAD_FAILED.test(state.buffer)
   ) {
     state.downloadStatus = 'success';
     const retryInfo = state.downloadRetryCount > 0 ? ` (重试了 ${state.downloadRetryCount} 次)` : '';
@@ -417,21 +462,25 @@ function handleTarPhase(
 ): void {
   if (!state.tarStatus) {
     onProgress('开始打包文件...');
-    stream.write(`cd ${ops.downloadDir}\r`);
+    const dlDir = shellEscape(ops.downloadDir);
+    const pkgName = shellEscape(options.pkgName);
+    stream.write(`cd ${dlDir}\r`);
     state.tarStatus = 'started';
-    stream.write(`tar -czf ${options.pkgName} * && echo "TAR_COMPLETED" || echo "TAR_FAILED"\r`);
+    stream.write(`tar -czf ${pkgName} * && echo "TAR_COMPLETED" || echo "TAR_FAILED"\r`);
     state.tarStatus = 'process';
     return;
   }
 
   if (state.tarStatus === 'process') {
-    if (state.buffer.includes('TAR_COMPLETED')) {
+    if (RE_TAR_COMPLETED.test(state.buffer)) {
       state.tarStatus = 'success';
       onProgress(`文件打包完成, 文件名: ${options.pkgName}`);
       onTarSuccess();
       onProgress('正在准备推送文件...');
-      stream.write(`sh ${ops.rsyncScript} ${options.pkgName}\r`);
-    } else if (state.buffer.includes('TAR_FAILED')) {
+      const rsyncScript = shellEscape(ops.rsyncScript);
+      const pkgName = shellEscape(options.pkgName);
+      stream.write(`sh ${rsyncScript} ${pkgName}\r`);
+    } else if (RE_TAR_FAILED.test(state.buffer)) {
       state.tarStatus = 'failed';
       fail('tar 打包失败');
     }
@@ -471,8 +520,7 @@ function handleRsyncPhase(
 
   if (
     state.rsyncStatus === 'process'
-    && state.buffer.includes('FILE_TRANSFERRED')
-    && !state.buffer.includes('test -f')
+    && RE_FILE_TRANSFERRED.test(state.buffer)
   ) {
     onProgress(`文件: ${options.pkgName} 推送完成`);
     state.rsyncStatus = 'finished';
@@ -502,7 +550,8 @@ function checkFileTransfer(
   if (state.rsyncStatus !== 'process') return;
 
   onProgress(`检测文件传输状态，检查次数: ${state.checkCount}`);
-  const tempRsyncPath = `${ops.rsyncBasePath}/${options.city}/`;
+  const tempRsyncPath = shellEscape(`${ops.rsyncBasePath}/${options.city}/`);
+  const pkgName = shellEscape(options.pkgName);
 
   if (state.checkCount >= RSYNC_MAX_CHECK_ATTEMPTS) {
     state.rsyncStatus = 'failed';
@@ -513,7 +562,7 @@ function checkFileTransfer(
     return;
   }
 
-  stream.write(`test -f ${tempRsyncPath}${options.pkgName} || echo "FILE_TRANSFERRED"\r`);
+  stream.write(`test -f ${tempRsyncPath}${pkgName} || echo "FILE_TRANSFERRED"\r`);
   state.checkCount += 1;
 
   setTimeout(() => {

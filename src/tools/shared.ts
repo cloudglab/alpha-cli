@@ -11,6 +11,8 @@ export const optionalTrimmedText = z.preprocess(
 );
 
 export function jsonResult(value: unknown, mode?: OutputMode): JsonContentResult {
+  // compact 与 verbose 数据等价，仅影响 meta 字段聚合；compact 不会裁剪数据量。
+  // 这里的 normal/compact 分层只决定是否把散落的 meta 字段收拢到 meta 对象。
   const effectiveMode = mode ?? currentOutputMode;
   const payload = effectiveMode === 'verbose'
     ? value
@@ -72,6 +74,11 @@ export interface UnsupportedWriteDiagnostic {
   payload?: unknown;
 }
 
+/**
+ * 是否允许写操作。默认返回 true（允许）；
+ * 仅当环境变量 ALPHA_DISABLE_WRITE 严格等于字符串 'true' 时返回 false。
+ * 注意：这里语义是「写是否启用」，与变量名 DISABLE 方向相反，调用方需注意不要反转。
+ */
 export function isWriteEnabled(): boolean {
   const flag = process.env.ALPHA_DISABLE_WRITE;
   return flag !== 'true';
@@ -132,6 +139,10 @@ export async function runWithPreview<T>(
   return runner();
 }
 
+/**
+ * compact 模式不做裁剪，与 verbose 数据等价；仅 normal 模式会聚合 meta 字段。
+ * 保留本函数是为了与 normal 分层对称、便于后续扩展真正的紧凑形态而不破坏现有消费者。
+ */
 function normalizeCompactPayload(value: unknown): unknown {
   return value;
 }

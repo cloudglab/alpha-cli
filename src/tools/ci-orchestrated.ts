@@ -6,10 +6,6 @@ import { jsonResult, withToolMeta } from './shared.js';
 // 与后端 APP_REGEX = ^([0-9a-z-]+):([0-9]+\.[0-9]+\.[0-9]+-[0-9]+)$ 保持一致
 const APP_REGEX = /^([0-9a-z-]+):(\d+\.\d+\.\d+-\d+)$/;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 interface BuildListResponse {
   list?: BuildRecord[];
   total?: number;
@@ -48,13 +44,45 @@ interface SelfBuildItem {
 }
 
 function pickBuild(record: BuildRecord | BranchSearchItem): BuildRecord {
-  return record as BuildRecord;
+  // 浅拷贝后返回，避免外部调用方持有并修改内部引用；去掉裸 as 断言。
+  return { ...record } as BuildRecord;
 }
 
 function compareByCreatedTimeDesc(a: BuildRecord, b: BuildRecord): number {
   const aTime = typeof a.createdTime === 'number' ? a.createdTime : Number(a.createdTime ?? 0);
   const bTime = typeof b.createdTime === 'number' ? b.createdTime : Number(b.createdTime ?? 0);
   return bTime - aTime;
+}
+
+/**
+ * 可被 SIGINT 中断的 sleep。返回一个在超时后 resolve 的 Promise，
+ * 期间收到 SIGINT 则 reject，便于长轮询循环在 Ctrl-C 时尽快退出。
+ * 调用方应在循环结束后调用 disposeInterrupt() 清理监听器。
+ */
+function createInterruptibleSleep(): { sleep: (ms: number) => Promise<void>; dispose: () => void } {
+  let interrupted = false;
+  let rejectPending: ((err: Error) => void) | null = null;
+  const onSigint = (): void => {
+    interrupted = true;
+    if (rejectPending) rejectPending(new Error('已取消：收到 SIGINT，轮询被用户中断。'));
+  };
+  process.once('SIGINT', onSigint);
+
+  return {
+    sleep(ms: number): Promise<void> {
+      if (interrupted) return Promise.reject(new Error('已取消：收到 SIGINT，轮询被用户中断。'));
+      return new Promise<void>((resolve, reject) => {
+        rejectPending = reject;
+        setTimeout(() => {
+          rejectPending = null;
+          resolve();
+        }, ms);
+      });
+    },
+    dispose(): void {
+      process.removeListener('SIGINT', onSigint);
+    },
+  };
 }
 
 export function registerCiOrchestratedTools(server: CliRegistry): void {
@@ -163,47 +191,51 @@ export function registerCiOrchestratedTools(server: CliRegistry): void {
     async ({ repoId, branch, buildId, timeoutSeconds, intervalSeconds }) => {
       const startTime = Date.now();
       const deadline = startTime + timeoutSeconds * 1000;
+      const interrupter = createInterruptibleSleep();
 
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const response = (await getApi().request('POST', '/alpha/ci/build/list', {
-          body: { repoId, branch, page: 1, count: 20 },
-        })) as BuildListResponse;
-        const list = Array.isArray(response?.list) ? response.list : [];
+      try {
+        while (true) {
+          const response = (await getApi().request('POST', '/alpha/ci/build/list', {
+            body: { repoId, branch, page: 1, count: 20 },
+          })) as BuildListResponse;
+          const list = Array.isArray(response?.list) ? response.list : [];
 
-        const target = typeof buildId === 'number'
-          ? list.find((item) => Number(item.id) === buildId)
-          : list[0];
+          const target = typeof buildId === 'number'
+            ? list.find((item) => Number(item.id) === buildId)
+            : list[0];
 
-        if (!target) {
-          throw new Error(`未找到 repoId=${repoId} branch=${branch} 的构建`);
+          if (!target) {
+            throw new Error(`未找到 repoId=${repoId} branch=${branch} 的构建`);
+          }
+
+          const status = typeof target.status === 'string' ? target.status : '';
+
+          if (status === 'success') {
+            return jsonResult(
+              withToolMeta(
+                {
+                  done: true,
+                  status: 'success',
+                  build: target,
+                  waitedSeconds: Math.round((Date.now() - startTime) / 1000),
+                },
+                { source: 'ci-orchestrated', command: 'ciBuildWait', method: 'poll', group: 'ci' },
+              ),
+            );
+          }
+
+          if (status === 'error' || status === 'failed') {
+            throw new Error(`构建失败: repoId=${repoId} branch=${branch} buildId=${buildId ?? target.id}`);
+          }
+
+          if (Date.now() >= deadline) {
+            throw new Error(`等待构建超时(${timeoutSeconds}秒)`);
+          }
+
+          await interrupter.sleep(intervalSeconds * 1000);
         }
-
-        const status = typeof target.status === 'string' ? target.status : '';
-
-        if (status === 'success') {
-          return jsonResult(
-            withToolMeta(
-              {
-                done: true,
-                status: 'success',
-                build: target,
-                waitedSeconds: Math.round((Date.now() - startTime) / 1000),
-              },
-              { source: 'ci-orchestrated', command: 'ciBuildWait', method: 'poll', group: 'ci' },
-            ),
-          );
-        }
-
-        if (status === 'error' || status === 'failed') {
-          throw new Error(`构建失败: repoId=${repoId} branch=${branch} buildId=${buildId ?? target.id}`);
-        }
-
-        if (Date.now() >= deadline) {
-          throw new Error(`等待构建超时(${timeoutSeconds}秒)`);
-        }
-
-        await sleep(intervalSeconds * 1000);
+      } finally {
+        interrupter.dispose();
       }
     },
     {
