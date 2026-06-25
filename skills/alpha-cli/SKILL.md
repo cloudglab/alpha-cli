@@ -1,3 +1,12 @@
+---
+name: alpha-cli
+description: 当用户要查询或操作 Alpha 一站式开发者平台时使用本 skill。提供 Alpha 平台任务、Bug、迭代、CI、部署、运维推送等命令行能力，默认只读、写操作需确认。
+triggers:
+  - alpha
+  - Alpha
+argument-hint: "[command]"
+---
+
 # alpha-cli
 
 当用户要查询或操作 Alpha 一站式开发者平台时使用本 skill。Alpha 页面地址通常是 `http://alpha.cloudglab.cn/`，CLI 调用后端接口。
