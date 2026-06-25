@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { CliRegistry } from '../core/cli-registry.js';
 import { getApi } from '../core/api-provider.js';
 import { opsPush, type OpsPushResult } from '../core/ssh.js';
-import { jsonResult, withToolMeta } from './shared.js';
+import { jsonResult, runWithPreview, withToolMeta } from './shared.js';
 
 export const PUSH_COMMAND_NAMES: readonly string[] = ['pushPkg'];
 
@@ -271,6 +271,7 @@ const pushPkgSchema = {
   imagesTimeoutSeconds: z.number().int().positive().default(600).describe('images 构建等待超时（秒），默认 600'),
   pollIntervalSeconds: z.number().int().positive().default(5).describe('轮询间隔（秒），默认 5'),
   verbose: z.boolean().default(false).describe('是否把进度打印到 stderr（默认静默）'),
+  confirm: z.boolean().optional().default(false).describe('写操作必须传 confirm=true 才会真正执行；不传或 false 时只返回 preview。'),
 };
 
 export function registerPushTools(server: CliRegistry): void {
@@ -278,127 +279,144 @@ export function registerPushTools(server: CliRegistry): void {
     'pushPkg',
     pushPkgSchema,
     async (input) => {
-      const makeProgress = (text: string): void => {
-        if (input.verbose) {
-          process.stderr.write(`[pushPkg] ${text}\n`);
+      const execute = async () => {
+        const makeProgress = (text: string): void => {
+          if (input.verbose) {
+            process.stderr.write(`[pushPkg] ${text}\n`);
+          }
+        };
+
+        const repoList = (await getApi().request('POST', '/alpha/ci/repo/list', {})) as RepoListItem[];
+        const repos = Array.isArray(repoList) ? repoList : [];
+        const chartsRepoId = resolveRepoId(repos, CHARTS_REPO_NAME, CHARTS_REPO_FALLBACK_ID);
+        const imagesRepoId = resolveRepoId(repos, IMAGES_REPO_NAME, IMAGES_REPO_FALLBACK_ID);
+        makeProgress(`charts repoId=${chartsRepoId} (${CHARTS_REPO_NAME}), images repoId=${imagesRepoId} (${IMAGES_REPO_NAME})`);
+
+        const chartsStart = new Date();
+        const chartsPkgName = `1.0.0-${formatTimestamp(chartsStart, 'MMDDHHmm')}`;
+        const chartsResult = await buildCharts(
+          chartsRepoId,
+          MASTER_BRANCH,
+          input.versions,
+          chartsPkgName,
+          input.chartsTimeoutSeconds,
+          input.pollIntervalSeconds,
+          makeProgress,
+        );
+
+        const imagesStart = new Date();
+        const imagesPkgName = `1.0.0-${formatTimestamp(imagesStart, 'MMDDHHmm')}`;
+        const imagesResult = await buildImages(
+          imagesRepoId,
+          MASTER_BRANCH,
+          chartsResult.chartsImagesText,
+          input.arch,
+          imagesPkgName,
+          input.imagesTimeoutSeconds,
+          input.pollIntervalSeconds,
+          makeProgress,
+        );
+
+        const materialUrls: string[] = [];
+        const materialNames: string[] = [];
+        if (input.files && input.files.length > 0) {
+          const now = new Date();
+          for (const item of input.files) {
+            const isRemote = /^https?:\/\//i.test(item);
+            const entry = isRemote
+              ? await registerRemoteMaterial(item, input.city, now)
+              : await uploadLocalMaterial(item, input.city, now);
+            materialUrls.push(entry.fileId);
+            materialNames.push(entry.name);
+          }
         }
-      };
 
-      const repoList = (await getApi().request('POST', '/alpha/ci/repo/list', {})) as RepoListItem[];
-      const repos = Array.isArray(repoList) ? repoList : [];
-      const chartsRepoId = resolveRepoId(repos, CHARTS_REPO_NAME, CHARTS_REPO_FALLBACK_ID);
-      const imagesRepoId = resolveRepoId(repos, IMAGES_REPO_NAME, IMAGES_REPO_FALLBACK_ID);
-      makeProgress(`charts repoId=${chartsRepoId} (${CHARTS_REPO_NAME}), images repoId=${imagesRepoId} (${IMAGES_REPO_NAME})`);
-
-      const chartsStart = new Date();
-      const chartsPkgName = `1.0.0-${formatTimestamp(chartsStart, 'MMDDHHmm')}`;
-      const chartsResult = await buildCharts(
-        chartsRepoId,
-        MASTER_BRANCH,
-        input.versions,
-        chartsPkgName,
-        input.chartsTimeoutSeconds,
-        input.pollIntervalSeconds,
-        makeProgress,
-      );
-
-      const imagesStart = new Date();
-      const imagesPkgName = `1.0.0-${formatTimestamp(imagesStart, 'MMDDHHmm')}`;
-      const imagesResult = await buildImages(
-        imagesRepoId,
-        MASTER_BRANCH,
-        chartsResult.chartsImagesText,
-        input.arch,
-        imagesPkgName,
-        input.imagesTimeoutSeconds,
-        input.pollIntervalSeconds,
-        makeProgress,
-      );
-
-      const materialUrls: string[] = [];
-      const materialNames: string[] = [];
-      if (input.files && input.files.length > 0) {
-        const now = new Date();
-        for (const item of input.files) {
-          const isRemote = /^https?:\/\//i.test(item);
-          const entry = isRemote
-            ? await registerRemoteMaterial(item, input.city, now)
-            : await uploadLocalMaterial(item, input.city, now);
-          materialUrls.push(entry.fileId);
-          materialNames.push(entry.name);
+        const downloadLinks: string[] = [imagesResult.imagesTarUrl, ...materialUrls];
+        if (input.includeChart && chartsResult.chartsTarUrl) {
+          downloadLinks.push(chartsResult.chartsTarUrl);
         }
-      }
 
-      const downloadLinks: string[] = [imagesResult.imagesTarUrl, ...materialUrls];
-      if (input.includeChart && chartsResult.chartsTarUrl) {
-        downloadLinks.push(chartsResult.chartsTarUrl);
-      }
+        const baseResult = {
+          pushed: false as boolean,
+          versions: input.versions,
+          city: input.city,
+          arch: input.arch,
+          pkgName: imagesResult.pkgName,
+          imagesTarUrl: imagesResult.imagesTarUrl,
+          chartsTarUrl: input.includeChart ? chartsResult.chartsTarUrl : undefined,
+          materialUrls,
+          materialNames,
+          materialDescription: input.materialDescription,
+          includeChart: input.includeChart,
+          downloadLinks,
+        };
 
-      const baseResult = {
-        pushed: false as boolean,
-        versions: input.versions,
-        city: input.city,
-        arch: input.arch,
-        pkgName: imagesResult.pkgName,
-        imagesTarUrl: imagesResult.imagesTarUrl,
-        chartsTarUrl: input.includeChart ? chartsResult.chartsTarUrl : undefined,
-        materialUrls,
-        materialNames,
-        materialDescription: input.materialDescription,
-        includeChart: input.includeChart,
-        downloadLinks,
-      };
+        if (input.noPush) {
+          return jsonResult(
+            withToolMeta(baseResult, {
+              source: 'push',
+              command: 'pushPkg',
+              method: 'orchestrate',
+              group: 'push',
+            }),
+          );
+        }
 
-      if (input.noPush) {
+        const sshResult: OpsPushResult = await opsPush({
+          urls: downloadLinks,
+          pkgName: imagesResult.pkgName,
+          city: input.city,
+          includeChart: input.includeChart,
+          onProgress: input.verbose
+            ? (text: string) => process.stderr.write(`[pushPkg] ${text}\n`)
+            : () => {},
+        });
+
+        const stagesSeconds = {
+          login: Math.round(sshResult.stages.login / 1000),
+          download: Math.round(sshResult.stages.download / 1000),
+          tar: Math.round(sshResult.stages.tar / 1000),
+          rsync: Math.round(sshResult.stages.rsync / 1000),
+        };
+        const totalSeconds =
+          stagesSeconds.login +
+          stagesSeconds.download +
+          stagesSeconds.tar +
+          stagesSeconds.rsync;
+
+        const finalResult = {
+          ...baseResult,
+          pushed: sshResult.transferred,
+          targetPath: sshResult.targetPath,
+          transferred: sshResult.transferred,
+          stages: stagesSeconds,
+          totalSeconds,
+        };
+
         return jsonResult(
-          withToolMeta(baseResult, {
+          withToolMeta(finalResult, {
             source: 'push',
             command: 'pushPkg',
             method: 'orchestrate',
             group: 'push',
           }),
         );
-      }
-
-      const sshResult: OpsPushResult = await opsPush({
-        urls: downloadLinks,
-        pkgName: imagesResult.pkgName,
-        city: input.city,
-        includeChart: input.includeChart,
-        onProgress: input.verbose
-          ? (text: string) => process.stderr.write(`[pushPkg] ${text}\n`)
-          : () => {},
-      });
-
-      const stagesSeconds = {
-        login: Math.round(sshResult.stages.login / 1000),
-        download: Math.round(sshResult.stages.download / 1000),
-        tar: Math.round(sshResult.stages.tar / 1000),
-        rsync: Math.round(sshResult.stages.rsync / 1000),
-      };
-      const totalSeconds =
-        stagesSeconds.login +
-        stagesSeconds.download +
-        stagesSeconds.tar +
-        stagesSeconds.rsync;
-
-      const finalResult = {
-        ...baseResult,
-        pushed: sshResult.transferred,
-        targetPath: sshResult.targetPath,
-        transferred: sshResult.transferred,
-        stages: stagesSeconds,
-        totalSeconds,
       };
 
-      return jsonResult(
-        withToolMeta(finalResult, {
-          source: 'push',
-          command: 'pushPkg',
-          method: 'orchestrate',
-          group: 'push',
-        }),
+      const preview = await runWithPreview(
+        'pushPkg',
+        {
+          versions: input.versions,
+          arch: input.arch,
+          city: input.city,
+          files: input.files,
+          includeChart: input.includeChart,
+          noPush: input.noPush,
+        },
+        input.confirm,
+        execute,
       );
+      return jsonResult(preview);
     },
     {
       group: 'push',
@@ -407,6 +425,7 @@ export function registerPushTools(server: CliRegistry): void {
         'alpha pushPkg --versions jwsp-office-automation:3.0.0-319751 --city hzcore',
         'alpha pushPkg --versions a:1.0.0-1 --versions b:2.0.0-2 --arch linux/arm64 --city hzcore --includeChart true',
         'alpha pushPkg --versions a:1.0.0-1 --city hzcore --noPush true',
+        'alpha pushPkg --versions a:1.0.0-1 --city hzcore --confirm true',
       ],
       costHint: 'high',
       nextBestTools: ['ciBuildFind', 'ciBuildWait', 'opsPush', 'deployMaterialUpload'],

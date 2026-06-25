@@ -1,6 +1,8 @@
+import http from 'node:http';
+import https from 'node:https';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
-import axios, { type AxiosError, type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
+import axios, { type AxiosError, type AxiosInstance, type AxiosRequestConfig } from 'axios';
 import FormData from 'form-data';
 import type { AlphaConfig } from '../types/common.js';
 import { sanitizeJsonLikeResponse } from '../utils/json.js';
@@ -9,6 +11,14 @@ export interface AlphaRequestOptions {
   body?: unknown;
   query?: Record<string, unknown>;
   files?: string[];
+}
+
+export interface AlphaHttpError extends Error {
+  code: AlphaHttpErrorCode;
+  statusCode?: number;
+  responseBody?: unknown;
+  url: string;
+  hint?: string;
 }
 
 export type AlphaHttpErrorCode =
@@ -22,29 +32,45 @@ export type AlphaHttpErrorCode =
   | 'timeout'
   | 'unknown';
 
-export interface AlphaHttpError extends Error {
-  code: AlphaHttpErrorCode;
-  status?: number;
-  response?: string;
-  url: string;
-  hint?: string;
-}
-
 const RESPONSE_PREVIEW_LIMIT = 1000;
+const GET_CACHE_TTL_MS = 15_000;
+
+interface CacheEntry {
+  expiresAt: number;
+  value: unknown;
+}
 
 export class AlphaHttpClient {
   private readonly client: AxiosInstance;
   private cookieHeader?: string;
+  private tokenBlacklist = new Set<string>();
+  private readonly responseCache = new Map<string, CacheEntry>();
 
   constructor(private readonly config: AlphaConfig) {
     this.client = axios.create({
       baseURL: config.url,
       timeout: config.timeoutMs,
+      httpAgent: new http.Agent({ keepAlive: true }),
+      httpsAgent: new https.Agent({ keepAlive: true }),
     });
   }
 
   async request<T = unknown>(method: string, url: string, options: AlphaRequestOptions = {}): Promise<T> {
+    return this.requestWithRetry<T>(method, url, options, false);
+  }
+
+  private async requestWithRetry<T>(
+    method: string,
+    url: string,
+    options: AlphaRequestOptions,
+    retried: boolean,
+  ): Promise<T> {
+    const cacheKey = this.getCacheKey(method, url, options);
+    const cached = this.readCache<T>(cacheKey);
+    if (cached !== undefined) return cached;
+
     await this.ensureLogin(url);
+
     const requestConfig: AxiosRequestConfig = {
       method,
       url,
@@ -71,9 +97,18 @@ export class AlphaHttpClient {
     try {
       const response = await this.client.request(requestConfig);
       this.captureCookie(response.headers['set-cookie']);
-      return sanitizeJsonLikeResponse(response.data) as T;
+      const normalized = sanitizeJsonLikeResponse(response.data) as T;
+      this.writeCache(cacheKey, method, normalized);
+      return normalized;
     } catch (error) {
       if (axios.isAxiosError(error)) {
+        if (!retried && error.response?.status === 401) {
+          this.invalidateToken();
+          return this.requestWithRetry<T>(method, url, options, true);
+        }
+        if (!retried && isRetryableNetworkError(error)) {
+          return this.requestWithRetry<T>(method, url, options, true);
+        }
         throw buildAlphaHttpError(error, this.config);
       }
       throw error;
@@ -82,7 +117,7 @@ export class AlphaHttpClient {
 
   private authHeaders(): Record<string, string> {
     const headers: Record<string, string> = {};
-    if (this.config.token) {
+    if (this.config.token && !this.tokenBlacklist.has(this.config.token)) {
       headers.Authorization = `Bearer ${this.config.token}`;
       headers.Token = this.config.token;
     }
@@ -118,6 +153,36 @@ export class AlphaHttpClient {
     const values = Array.isArray(setCookie) ? setCookie : [setCookie];
     this.cookieHeader = values.map((item) => item.split(';')[0]).join('; ');
   }
+
+  private invalidateToken(): void {
+    if (this.config.token) this.tokenBlacklist.add(this.config.token);
+  }
+
+  private getCacheKey(method: string, url: string, options: AlphaRequestOptions): string | undefined {
+    if (method.toUpperCase() !== 'GET') return undefined;
+    return JSON.stringify({
+      method: method.toUpperCase(),
+      url,
+      params: options.query ?? null,
+      data: null,
+    });
+  }
+
+  private readCache<T>(key: string | undefined): T | undefined {
+    if (!key) return undefined;
+    const cached = this.responseCache.get(key);
+    if (!cached) return undefined;
+    if (cached.expiresAt <= Date.now()) {
+      this.responseCache.delete(key);
+      return undefined;
+    }
+    return attachCacheMeta(cached.value) as T;
+  }
+
+  private writeCache(key: string | undefined, method: string, value: unknown): void {
+    if (!key || method.toUpperCase() !== 'GET') return;
+    this.responseCache.set(key, { expiresAt: Date.now() + GET_CACHE_TTL_MS, value });
+  }
 }
 
 export function buildAlphaHttpError(error: AxiosError, config: AlphaConfig): AlphaHttpError {
@@ -131,9 +196,10 @@ export function buildAlphaHttpError(error: AxiosError, config: AlphaConfig): Alp
   const baseMessage = `请求失败：HTTP ${status ?? 'NO_STATUS'} ${error.message}`;
 
   const composed = new Error(`${baseMessage}。返回=${responseText}`) as AlphaHttpError;
+  composed.name = 'AlphaHttpError';
   composed.code = classification;
-  composed.status = status;
-  composed.response = responseText;
+  composed.statusCode = status;
+  composed.responseBody = data;
   composed.url = url;
   composed.hint = hint;
 
@@ -151,9 +217,10 @@ function buildAlphaLoginError(error: AxiosError, config: AlphaConfig): AlphaHttp
   if (status === 401 || status === 403) {
     const message = `登录失败：账号或密码错误，HTTP ${status}。`;
     const composed = new Error(message) as AlphaHttpError;
+    composed.name = 'AlphaHttpError';
     composed.code = 'invalid-credentials';
-    composed.status = status;
-    composed.response = responseText;
+    composed.statusCode = status;
+    composed.responseBody = error.response?.data;
     composed.url = `${config.url}/alpha/login`;
     composed.hint = `请确认 ALPHA_USERNAME/ALPHA_PASSWORD，或使用 alpha initAlpha --token <token> --save true 配置 token 后重试。`;
     return composed;
@@ -163,18 +230,20 @@ function buildAlphaLoginError(error: AxiosError, config: AlphaConfig): AlphaHttp
     const composed = new Error(
       `登录失败：/alpha/login 接口不存在，当前地址可能不对。请检查 ALPHA_URL 或 alpha initAlpha 配置。HTTP 404，返回=${responseText}`,
     ) as AlphaHttpError;
+    composed.name = 'AlphaHttpError';
     composed.code = 'endpoint-not-found';
-    composed.status = status;
-    composed.response = responseText;
+    composed.statusCode = status;
+    composed.responseBody = error.response?.data;
     composed.url = `${config.url}/alpha/login`;
     return composed;
   }
 
   if (typeof status === 'number' && status >= 500) {
     const composed = new Error(`登录失败：Alpha 服务端异常，HTTP ${status}，返回=${responseText}`) as AlphaHttpError;
+    composed.name = 'AlphaHttpError';
     composed.code = 'server-error';
-    composed.status = status;
-    composed.response = responseText;
+    composed.statusCode = status;
+    composed.responseBody = error.response?.data;
     composed.url = `${config.url}/alpha/login`;
     return composed;
   }
@@ -198,7 +267,7 @@ function classifyError(status: number | undefined, axiosCode: string | undefined
 function buildErrorHint(code: AlphaHttpErrorCode, status: number | undefined, config: AlphaConfig): string | undefined {
   switch (code) {
     case 'unauthorized':
-      return 'Token 无效或已过期。请运行 alpha initAlpha --token <new-token> --save true 重新配置。';
+      return 'Token 无效或已过期。HTTP 层会自动清空当前 token 并重试一次；如重试仍失败，请运行 alpha initAlpha --token <new-token> --save true 重新配置。';
     case 'forbidden':
       return '当前账号没有访问权限。请确认 ALPHA_USERNAME 角色，或切换 alpha --role full/iter/ci 后重试。';
     case 'endpoint-not-found':
@@ -206,9 +275,9 @@ function buildErrorHint(code: AlphaHttpErrorCode, status: number | undefined, co
     case 'server-error':
       return `Alpha 服务端 HTTP ${status ?? '?'}。请稍后重试，或检查服务端日志。`;
     case 'network-error':
-      return `无法连接 ${config.url}。请检查网络、代理或 ALPHA_URL 配置。`;
+      return `无法连接 ${config.url}。HTTP 层会针对 ECONNRESET/ETIMEDOUT/EAI_AGAIN 自动重试一次；如再次失败，请检查网络、代理或 ALPHA_URL 配置。`;
     case 'timeout':
-      return `请求超时（${config.timeoutMs ?? 30_000}ms）。可使用 alpha initAlpha --timeoutMs <ms> --save true 调高超时。`;
+      return `请求超时（${config.timeoutMs ?? 30_000}ms）。HTTP 层会针对 ECONNABORTED 自动重试一次；如再次失败，可使用 alpha initAlpha --timeoutMs <ms> --save true 调高超时。`;
     case 'bad-response':
       return `服务端返回了未预期内容。返回内容前 ${RESPONSE_PREVIEW_LIMIT} 字已附在错误信息中，便于排查。`;
     default:
@@ -237,6 +306,18 @@ export function describeResponseData(data: unknown, fallback: string): string {
   }
 }
 
-export function extractAxiosResponse(error: AxiosError): AxiosResponse | undefined {
-  return error.response;
+function attachCacheMeta(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  return {
+    ...(value as Record<string, unknown>),
+    cacheHit: true,
+  };
+}
+
+function isRetryableNetworkError(error: { code?: string; message?: string }): boolean {
+  if (['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ECONNABORTED', 'ERR_NETWORK', 'EPIPE'].includes(error.code ?? '')) {
+    return true;
+  }
+  const message = error.message ?? '';
+  return /timeout|socket hang up|network|econnreset/i.test(message);
 }

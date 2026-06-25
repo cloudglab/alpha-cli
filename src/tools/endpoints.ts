@@ -2,42 +2,149 @@ import { z } from 'zod';
 import type { CliCommandMetadata, CliRegistry } from '../core/cli-registry.js';
 import type { EndpointToolGroup } from '../core/roles.js';
 import { getApi } from '../core/api-provider.js';
-import { jsonResult, withToolMeta } from './shared.js';
+import { jsonResult, runWithPreview, withToolMeta } from './shared.js';
 
 export interface EndpointDefinition {
   group: EndpointToolGroup;
   name: string;
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   path: string;
   request?: string;
   mode?: 'body' | 'query' | 'multipart' | 'none';
 }
 
-const endpointSchema = {
+const READ_ENDPOINT_NAMES: ReadonlySet<string> = new Set([
+  // 部分 POST 接口在 Alpha 后端是只读查询（userinfo/uid/fileMetadataTypes 等），不强制 confirm。
+  'userinfo',
+  'uid',
+  'healthHealthPing',
+  'testApi',
+  'ciBuildList',
+  'ciBuildPopularList',
+  'ciBuildGetLatest',
+  'ciBuildGetSelfBuild',
+  'ciBranchList',
+  'ciBranchSearch',
+  'ciBuildGetBuild',
+  'ciInfoGetServerTime',
+  'ciInfoJenkinsOutput',
+  'ciInfoGetRelCommit',
+  'ciInfoChangeInfo',
+  'ciManageGetPipelines',
+  'ciManageGetTemplateList',
+  'ciManageGetConfig',
+  'ciRepoList',
+  'ciRepoPage',
+  'ciRepoInfo',
+  'ciRepoConfigDetail',
+  'deployAppsPage',
+  'deployAppsVersionList',
+  'deployAppsNsList',
+  'deployAppsRecentList',
+  'deployAppsViewK8s',
+  'deployAppsDetailK8s',
+  'deployAppsLogUrl',
+  'deployAppsBashUrl',
+  'deployAppsViewHistory',
+  'deployChartsPage',
+  'deployChartsDetail',
+  'deployChartsVersion',
+  'deployChartsValues',
+  'deployChartsDeployStatus',
+  'deployClusterPage',
+  'deployClusterList',
+  'deployClusterDetail',
+  'deployClusterTypeList',
+  'deployClusterDestinations',
+  'deployMaterialPage',
+  'deployMaterialList',
+  'deployMaterialDetail',
+  'deployProjectAzProList',
+  'deployProjectAzUserList',
+  'deployProjectDeployPage',
+  'deployProjectDeployPageExpand',
+  'deployProjectPushList',
+  'deployProjectPushPage',
+  'deployProjectPushPageExpand',
+  'deployPushenvPage',
+  'deployPushenvList',
+  'deployPushenvDetail',
+  'fileMetadataPage',
+  'fileMetadataTypes',
+  'iterHotfixList',
+  'iterHotfixDetail',
+  'iterProdGetList',
+  'iterProjectGetList',
+  'iterGetTree',
+  'iterVersionList',
+  'iterVersionTagList',
+  'iterVersionDetail',
+  'iterVersionTestVersionList',
+  'iterVersionTestVersionDetail',
+  'iterVersionTestVersionCount',
+  'iterVersionGetTree',
+  'iterVersionGetRecentTestSubmitted',
+  'rbacPrivilegeCurrentList',
+  'rbacPrivilegeList',
+  'rbacRoleCurrentList',
+]);
+
+function isWriteMethod(method: string): boolean {
+  const upper = method.toUpperCase();
+  return upper === 'POST' || upper === 'PUT' || upper === 'DELETE' || upper === 'PATCH';
+}
+
+function isWriteEndpoint(endpoint: EndpointDefinition): boolean {
+  if (!isWriteMethod(endpoint.method)) return false;
+  if (READ_ENDPOINT_NAMES.has(endpoint.name)) return false;
+  return true;
+}
+
+const baseEndpointSchema = {
   body: z.record(z.unknown()).optional().describe('JSON 请求体。'),
   query: z.record(z.unknown()).optional().describe('URL query 参数。'),
   file: z.array(z.string()).optional().describe('multipart 文件路径，可重复传。'),
+};
+
+const writeEndpointSchema = {
+  ...baseEndpointSchema,
+  confirm: z.boolean().optional().default(false).describe('写操作必须传 confirm=true 才会真正执行；不传或 false 时只返回 preview。'),
 };
 
 export function registerEndpointTools(server: CliRegistry, group?: EndpointToolGroup): void {
   for (const endpoint of ENDPOINTS) {
     if (group && endpoint.group !== group) continue;
     const groupName = endpoint.group;
-    server.tool(endpoint.name, endpointSchema, async ({ body, query, file }) => {
-      const result = await getApi().request(endpoint.method, endpoint.path, {
-        body: endpoint.mode === 'query' || endpoint.mode === 'none' ? undefined : body,
-        query: endpoint.mode === 'body' || endpoint.mode === 'multipart' ? query : query ?? body,
-        files: file,
-      });
-      const decorated = withToolMeta(result, {
-        source: 'alpha-api',
-        command: endpoint.name,
-        method: endpoint.method,
-        path: endpoint.path,
-        mode: endpoint.mode ?? 'body',
-        group: groupName,
-      });
-      return jsonResult(decorated);
+    const isWrite = isWriteEndpoint(endpoint);
+    const schema = isWrite ? writeEndpointSchema : baseEndpointSchema;
+    server.tool(endpoint.name, schema, async (input) => {
+      const { body, query, file, confirm } = input as { body?: Record<string, unknown>; query?: Record<string, unknown>; file?: string[]; confirm?: boolean };
+      const execute = async () => {
+        const result = await getApi().request(endpoint.method, endpoint.path, {
+          body: endpoint.mode === 'query' || endpoint.mode === 'none' ? undefined : body,
+          query: endpoint.mode === 'body' || endpoint.mode === 'multipart' ? query : query ?? body,
+          files: file,
+        });
+        const decorated = withToolMeta(result, {
+          source: 'alpha-api',
+          command: endpoint.name,
+          method: endpoint.method,
+          path: endpoint.path,
+          mode: endpoint.mode ?? 'body',
+          group: groupName,
+        });
+        return jsonResult(decorated);
+      };
+
+      if (!isWrite) return execute();
+
+      const preview = await runWithPreview(
+        endpoint.name,
+        { method: endpoint.method, path: endpoint.path, body, query, file },
+        confirm,
+        execute,
+      );
+      return jsonResult(preview);
     }, buildEndpointMetadata(endpoint));
   }
 }

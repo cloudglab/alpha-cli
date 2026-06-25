@@ -1,5 +1,5 @@
 export { AlphaApi } from './api/index.js';
-export { renderBanner, runInstallCommand, runUpdateCommand } from './install.js';
+export { renderBanner, runInstallCommand, runUninstallCommand, runUpdateCommand } from './install.js';
 export { runCli } from './cli.js';
 export { InMemoryCliRegistry, parseCommandInput } from './core/cli-registry.js';
 export { DEVOPS_SCENE_COMMAND, DEVOPS_SCENE_GROUP, normalizeImplicitSceneInvocation, parseDevopsScene } from './core/devops-scene.js';

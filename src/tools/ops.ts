@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { CliRegistry } from '../core/cli-registry.js';
 import { opsPush, type OpsPushOptions, type OpsPushResult } from '../core/ssh.js';
 import type { OpsConfig } from '../types/common.js';
-import { jsonResult, withToolMeta } from './shared.js';
+import { jsonResult, runWithPreview, withToolMeta } from './shared.js';
 
 /**
  * 运维命令清单：tool-registry 用它把命令路由到 ops 加载器。
@@ -30,6 +30,7 @@ const opsPushSchema = {
   sshUser: z.string().trim().optional().describe('运行时 SSH 账号（覆盖 ALPHA_SSH_USER）'),
   sshPass: z.string().trim().optional().describe('运行时 SSH 密码（覆盖 ALPHA_SSH_PASS）'),
   verbose: z.boolean().default(false).describe('是否把 SSH 推送进度打印到 stderr（默认静默）'),
+  confirm: z.boolean().optional().default(false).describe('写操作必须传 confirm=true 才会真正执行；不传或 false 时只返回 preview。'),
 };
 
 export function registerOpsTools(server: CliRegistry): void {
@@ -37,61 +38,76 @@ export function registerOpsTools(server: CliRegistry): void {
     'opsPush',
     opsPushSchema,
     async (input) => {
-      const opsOverrides: Partial<OpsConfig> = {};
-      if (input.bastionHost) opsOverrides.bastionHost = input.bastionHost;
-      if (input.targetServer) opsOverrides.targetServer = input.targetServer;
-      if (input.systemUserId) opsOverrides.systemUserId = input.systemUserId;
-      if (input.downloadDir) opsOverrides.downloadDir = input.downloadDir;
-      if (input.rsyncScript) opsOverrides.rsyncScript = input.rsyncScript;
+      const execute = async () => {
+        const opsOverrides: Partial<OpsConfig> = {};
+        if (input.bastionHost) opsOverrides.bastionHost = input.bastionHost;
+        if (input.targetServer) opsOverrides.targetServer = input.targetServer;
+        if (input.systemUserId) opsOverrides.systemUserId = input.systemUserId;
+        if (input.downloadDir) opsOverrides.downloadDir = input.downloadDir;
+        if (input.rsyncScript) opsOverrides.rsyncScript = input.rsyncScript;
 
-      const options: OpsPushOptions = {
-        urls: input.urls,
-        pkgName: input.pkgName,
-        city: input.city,
-        includeChart: input.includeChart,
-        ops: opsOverrides,
-        sshUser: input.sshUser,
-        sshPass: input.sshPass,
-        ...(input.verbose
-          ? {
-              onProgress: (text: string) => {
-                process.stderr.write(`[opsPush] ${text}\n`);
-              },
-            }
-          : {}),
+        const options: OpsPushOptions = {
+          urls: input.urls,
+          pkgName: input.pkgName,
+          city: input.city,
+          includeChart: input.includeChart,
+          ops: opsOverrides,
+          sshUser: input.sshUser,
+          sshPass: input.sshPass,
+          ...(input.verbose
+            ? {
+                onProgress: (text: string) => {
+                  process.stderr.write(`[opsPush] ${text}\n`);
+                },
+              }
+            : {}),
+        };
+
+        const result: OpsPushResult = await opsPush(options);
+        const stagesSeconds = {
+          login: Math.round(result.stages.login / 1000),
+          download: Math.round(result.stages.download / 1000),
+          tar: Math.round(result.stages.tar / 1000),
+          rsync: Math.round(result.stages.rsync / 1000),
+        };
+        const totalSeconds =
+          stagesSeconds.login +
+          stagesSeconds.download +
+          stagesSeconds.tar +
+          stagesSeconds.rsync;
+
+        return jsonResult(
+          withToolMeta(
+            {
+              pkgName: result.pkgName,
+              city: result.city,
+              targetPath: result.targetPath,
+              transferred: result.transferred,
+              stages: stagesSeconds,
+              totalSeconds,
+            },
+            {
+              source: 'ops',
+              command: 'opsPush',
+              method: 'ssh-push',
+              group: 'ops',
+            },
+          ),
+        );
       };
 
-      const result: OpsPushResult = await opsPush(options);
-      const stagesSeconds = {
-        login: Math.round(result.stages.login / 1000),
-        download: Math.round(result.stages.download / 1000),
-        tar: Math.round(result.stages.tar / 1000),
-        rsync: Math.round(result.stages.rsync / 1000),
-      };
-      const totalSeconds =
-        stagesSeconds.login +
-        stagesSeconds.download +
-        stagesSeconds.tar +
-        stagesSeconds.rsync;
-
-      return jsonResult(
-        withToolMeta(
-          {
-            pkgName: result.pkgName,
-            city: result.city,
-            targetPath: result.targetPath,
-            transferred: result.transferred,
-            stages: stagesSeconds,
-            totalSeconds,
-          },
-          {
-            source: 'ops',
-            command: 'opsPush',
-            method: 'ssh-push',
-            group: 'ops',
-          },
-        ),
+      const preview = await runWithPreview(
+        'opsPush',
+        {
+          urls: input.urls,
+          pkgName: input.pkgName,
+          city: input.city,
+          includeChart: input.includeChart,
+        },
+        input.confirm,
+        execute,
       );
+      return jsonResult(preview);
     },
     {
       group: 'ops',
@@ -99,6 +115,7 @@ export function registerOpsTools(server: CliRegistry): void {
       examples: [
         'alpha opsPush --urls http://devops.cloudglab.cn/release/job-glab-pkg_images/319751/pkg-1.0.0-aio-319751.tar --pkgName pkg-1.0.0-319751.tar --city hzcore',
         'alpha opsPush --urls http://a.tar --urls http://b.tar --pkgName pkg.tar --city hzcore --verbose',
+        'alpha opsPush --urls http://a.tar --pkgName pkg.tar --city hzcore --confirm true',
       ],
       costHint: 'high',
       nextBestTools: ['pushPkg', 'deployMaterialUpload', 'ciBuildParamsBuild'],

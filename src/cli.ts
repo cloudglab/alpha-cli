@@ -1,15 +1,16 @@
 import { InMemoryCliRegistry, parseCommandInput } from './core/cli-registry.js';
 import { getBuiltinCommandHelp, printCommandHelp, printCommandList, printHelp } from './core/cli-output.js';
 import { normalizeImplicitSceneInvocation } from './core/devops-scene.js';
-import { runInstallCommand, runUpdateCommand } from './install.js';
+import { runInstallCommand, runUninstallCommand, runUpdateCommand } from './install.js';
 import { registerTools } from './core/tool-registry.js';
+import { renderChangelog, type ChangelogOptions } from './core/changelog.js';
 import type { Role } from './types/common.js';
 import { CLI_VERSION } from './version.js';
 import { type OutputMode, setGlobalOutputMode } from './tools/shared.js';
 
 const VALID_ROLES = new Set<Role>(['full', 'ci', 'deploy', 'iter', 'rbac', 'file', 'ops']);
 const VALID_OUTPUT_MODES = new Set<OutputMode>(['compact', 'normal', 'verbose']);
-const BUILTIN_COMMAND_NAMES = ['help', 'list', 'version', 'install', 'update', 'upgrade'];
+const BUILTIN_COMMAND_NAMES = ['help', 'list', 'version', 'install', 'uninstall', 'remove', 'update', 'upgrade', 'changelog'];
 
 export async function runCli(rawArgs: string[]): Promise<void> {
   const parsedArgs = parseCliArgs(rawArgs);
@@ -93,6 +94,16 @@ export async function runCli(rawArgs: string[]): Promise<void> {
     return;
   }
 
+  if (commandName === 'uninstall' || commandName === 'remove') {
+    if (hasHelpFlag(commandArgs)) {
+      process.stdout.write(`${getBuiltinCommandHelp('uninstall')}\n`);
+      return;
+    }
+
+    await runUninstallCommand(commandArgs);
+    return;
+  }
+
   if (commandName === 'update' || commandName === 'upgrade') {
     if (hasHelpFlag(commandArgs)) {
       process.stdout.write(`${getBuiltinCommandHelp('update')}\n`);
@@ -100,6 +111,17 @@ export async function runCli(rawArgs: string[]): Promise<void> {
     }
 
     await runUpdateCommand(commandArgs);
+    return;
+  }
+
+  if (commandName === 'changelog') {
+    if (hasHelpFlag(commandArgs)) {
+      process.stdout.write(`${getBuiltinCommandHelp('changelog')}\n`);
+      return;
+    }
+
+    const options = parseChangelogOptions(commandArgs);
+    process.stdout.write(`${await renderChangelog(options)}\n`);
     return;
   }
 
@@ -181,6 +203,57 @@ function parseListOptions(args: string[]): { raw: boolean } {
   }
 
   return { raw: args.includes('--raw') };
+}
+
+function parseChangelogOptions(args: string[]): ChangelogOptions {
+  const options: ChangelogOptions = { limit: 5, raw: false };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--raw') {
+      options.raw = true;
+      continue;
+    }
+
+    if (arg === '--limit' || arg.startsWith('--limit=')) {
+      const value = arg.startsWith('--limit=') ? arg.slice('--limit='.length) : args[++index];
+      if (value === undefined) {
+        throw new Error('changelog --limit 需要一个值');
+      }
+      if (value === 'all') {
+        options.limit = 'all';
+        continue;
+      }
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error(`changelog --limit 必须是正整数或 all，收到: ${value}`);
+      }
+      options.limit = parsed;
+      continue;
+    }
+
+    if (arg === '--version' || arg.startsWith('--version=')) {
+      const value = arg.startsWith('--version=') ? arg.slice('--version='.length) : args[++index];
+      if (!value) {
+        throw new Error('changelog --version 需要一个值');
+      }
+      options.version = value;
+      continue;
+    }
+
+    if (arg === '--since' || arg.startsWith('--since=')) {
+      const value = arg.startsWith('--since=') ? arg.slice('--since='.length) : args[++index];
+      if (!value) {
+        throw new Error('changelog --since 需要一个值');
+      }
+      options.since = value;
+      continue;
+    }
+
+    throw new Error(`changelog 不支持参数: ${arg}`);
+  }
+
+  return options;
 }
 
 function hasHelpFlag(args: string[]): boolean {

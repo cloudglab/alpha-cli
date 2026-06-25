@@ -3,8 +3,10 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import type { AlphaConfig, OpsConfig } from '../types/common.js';
 
-const CONFIG_DIR = path.join(homedir(), '.alpha-cli');
+const CONFIG_DIR = path.join(homedir(), '.alpha');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+const LEGACY_CONFIG_DIR = path.join(homedir(), '.alpha-cli');
+const LEGACY_CONFIG_FILE = path.join(LEGACY_CONFIG_DIR, 'config.json');
 
 function normalizeServerUrl(url: string): string {
   const trimmed = url.trim();
@@ -79,10 +81,14 @@ export function loadConfig(): AlphaConfig | null {
   const hasAnyEnvOverride = Object.values(envConfig).some((value) => value !== undefined && value !== '');
 
   if (!existsSync(CONFIG_FILE)) {
+    if (existsSync(LEGACY_CONFIG_FILE)) {
+      const raw = readConfigFile(LEGACY_CONFIG_FILE);
+      return hasAnyEnvOverride ? normalizeConfig(mergeWithEnv(raw, envConfig)) : normalizeConfig(raw);
+    }
     return envConfig.url ? normalizeConfig(envConfig) : null;
   }
 
-  const raw = readConfigFile();
+  const raw = readConfigFile(CONFIG_FILE);
   if (!hasAnyEnvOverride) return normalizeConfig(raw);
 
   const merged: Partial<AlphaConfig> = {
@@ -96,6 +102,19 @@ export function loadConfig(): AlphaConfig | null {
     merged.ops = mergeOpsConfig(raw.ops, envConfig.ops);
   }
   return normalizeConfig(merged);
+}
+
+function mergeWithEnv(raw: Partial<AlphaConfig>, envConfig: Partial<AlphaConfig>): Partial<AlphaConfig> {
+  const merged: Partial<AlphaConfig> = {
+    ...raw,
+    ...Object.fromEntries(
+      Object.entries(envConfig).filter(([, value]) => value !== undefined && value !== ''),
+    ),
+  };
+  if (raw.ops || envConfig.ops) {
+    merged.ops = mergeOpsConfig(raw.ops, envConfig.ops);
+  }
+  return merged;
 }
 
 /**
@@ -134,16 +153,16 @@ export function saveConfig(config: AlphaConfig): void {
   writeFileSync(CONFIG_FILE, `${JSON.stringify(normalized, null, 2)}\n`, { mode: 0o600 });
 }
 
-function readConfigFile(): Partial<AlphaConfig> {
+function readConfigFile(filePath: string = CONFIG_FILE): Partial<AlphaConfig> {
   try {
-    const parsed = JSON.parse(readFileSync(CONFIG_FILE, 'utf8')) as unknown;
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as unknown;
     if (!isRecord(parsed)) {
       throw new Error('配置内容必须是 JSON 对象');
     }
     return parsed as Partial<AlphaConfig>;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Alpha 配置文件损坏，请检查 ${CONFIG_FILE}：${message}`);
+    throw new Error(`Alpha 配置文件损坏，请检查 ${filePath}：${message}`);
   }
 }
 

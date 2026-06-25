@@ -74,7 +74,7 @@ export interface UnsupportedWriteDiagnostic {
 
 export function isWriteEnabled(): boolean {
   const flag = process.env.ALPHA_DISABLE_WRITE;
-  return flag !== 'true' && flag !== '1';
+  return flag !== 'true';
 }
 
 export function assertWriteAllowed(input: WriteGuardInput): void {
