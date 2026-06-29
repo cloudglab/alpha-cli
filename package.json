@@ -1,6 +1,6 @@
 {
   "name": "@cloudglab/alpha-cli",
-  "version": "0.1.1",
+  "version": "1.0.0",
   "description": "Alpha platform CLI generated from javams-glab-alpha HTTP APIs",
   "type": "module",
   "main": "dist/index.js",

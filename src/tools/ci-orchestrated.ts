@@ -175,6 +175,34 @@ export function registerCiOrchestratedTools(server: CliRegistry): void {
       ],
       costHint: 'medium',
       nextBestTools: ['ciBuildList', 'ciBuildGetSelfBuild'],
+      recommendations: [
+        {
+          tool: 'ciBuildWait',
+          reason: '继续等待这条构建完成',
+          priority: 2,
+          args: {
+            repoId: { source: 'payload', path: 'repoId' },
+            branch: { source: 'payload', path: 'branch' },
+            buildId: { source: 'payload', path: 'build.id' },
+          },
+        },
+        {
+          tool: 'ciBuildList',
+          reason: '按 repoId 和分支查看同批次构建列表',
+          priority: 1,
+          args: {
+            body: {
+              repoId: { source: 'payload', path: 'repoId' },
+              branch: { source: 'payload', path: 'branch' },
+            },
+          },
+        },
+        {
+          tool: 'ciBuildGetSelfBuild',
+          reason: '回到当前用户的常用构建仓库列表',
+          priority: 0,
+        },
+      ],
     },
   );
 
@@ -248,6 +276,29 @@ export function registerCiOrchestratedTools(server: CliRegistry): void {
       ],
       costHint: 'high',
       nextBestTools: ['ciBuildList', 'ciBuildGetSelfBuild'],
+      recommendations: [
+        {
+          tool: 'ciBuildList',
+          reason: '查看这条构建所在分支的最新构建列表',
+          priority: 1,
+          args: {
+            body: {
+              repoId: { source: 'input', path: 'repoId' },
+              branch: { source: 'input', path: 'branch' },
+            },
+          },
+        },
+        {
+          tool: 'ciBuildGetBuild',
+          reason: '查看成功构建的详情',
+          priority: 2,
+          args: {
+            body: {
+              id: { source: 'payload', path: 'build.id' },
+            },
+          },
+        },
+      ],
     },
   );
 

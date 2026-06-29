@@ -48,6 +48,18 @@ export function registerInitTools(server: CliRegistry): void {
       ],
       costHint: 'low',
       nextBestTools: ['getAlphaConfig'],
+      recommendations: [
+        {
+          tool: 'getAlphaConfig',
+          reason: '查看当前生效配置并确认脱敏结果',
+          priority: 1,
+        },
+        {
+          tool: 'healthHealthPing',
+          reason: '继续检查 Alpha 服务连通性',
+          priority: 0,
+        },
+      ],
     },
   );
 
@@ -63,6 +75,18 @@ export function registerInitTools(server: CliRegistry): void {
       description: '查看当前 Alpha CLI 配置。',
       examples: ['alpha getAlphaConfig', 'alpha --output verbose getAlphaConfig'],
       costHint: 'low',
+      recommendations: [
+        {
+          tool: 'healthHealthPing',
+          reason: '确认当前配置对应的 Alpha 服务可连通',
+          priority: 1,
+        },
+        {
+          tool: 'userinfo',
+          reason: '确认当前 token 或登录态对应的用户信息',
+          priority: 0,
+        },
+      ],
     },
   );
 }

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { CliCommandMetadata, CliRegistry } from '../core/cli-registry.js';
+import type { CliCommandMetadata, CliRecommendation, CliRegistry } from '../core/cli-registry.js';
 import type { EndpointToolGroup } from '../core/roles.js';
 import { getApi } from '../core/api-provider.js';
 import { jsonResult, runWithPreview, withToolMeta } from './shared.js';
@@ -170,6 +170,289 @@ const GROUP_RECOMMENDED_NEXT: Record<EndpointToolGroup, string[]> = {
   rbac: ['rbacPrivilegeCurrentList', 'rbacRoleCurrentList'],
 };
 
+const ENDPOINT_RECOMMENDATIONS: Partial<Record<string, CliRecommendation[]>> = {
+  deployAppsPage: [
+    {
+      tool: 'deployAppsViewHistory',
+      reason: '继续查看某个应用的部署历史',
+      priority: 2,
+      args: { body: { appId: { source: ['payload', 'input'], path: ['list.0.appId', 'list.0.id', 'id', 'data.0.appId', 'data.0.id', 'body.appId', 'body.id'] } } },
+    },
+    { tool: 'deployAppsViewK8s', reason: '继续查看应用当前 K8s 资源', priority: 1 },
+    { tool: 'deployClusterList', reason: '切回集群维度筛选部署目标', priority: 0 },
+  ],
+  deployAppsViewHistory: [
+    {
+      tool: 'deployAppsRollback',
+      reason: '基于同一查询条件继续发起回滚',
+      priority: 2,
+      args: { body: { source: 'input', path: 'body' } },
+    },
+    {
+      tool: 'deployAppsPage',
+      reason: '回到应用分页列表继续筛选',
+      priority: 0,
+    },
+  ],
+  deployClusterList: [
+    {
+      tool: 'deployClusterDetail',
+      reason: '继续查看某个集群的详情',
+      priority: 1,
+      args: { body: { id: { source: ['payload', 'input'], path: ['list.0.id', 'id', 'data.0.id', 'body.id'] } } },
+    },
+    { tool: 'deployAppsPage', reason: '按集群结果继续查看应用部署', priority: 0 },
+  ],
+  deployMaterialPage: [
+    {
+      tool: 'deployMaterialDetail',
+      reason: '继续查看某个物料详情',
+      priority: 1,
+      args: { body: { id: { source: ['payload', 'input'], path: ['list.0.id', 'id', 'data.0.id', 'body.id'] } } },
+    },
+    { tool: 'deployMaterialUpload', reason: '补充上传新物料', priority: 0 },
+  ],
+  deployProjectDeployPage: [
+    {
+      tool: 'deployProjectDeployPageExpand',
+      reason: '继续展开单条部署记录看详情',
+      priority: 2,
+      args: { body: { deployId: { source: ['payload', 'input'], path: ['list.0.deployId', 'list.0.id', 'deployId', 'id', 'data.0.deployId', 'data.0.id', 'body.deployId', 'body.id'] } } },
+    },
+    { tool: 'deployProjectPushPage', reason: '切到推包记录页继续排查', priority: 1 },
+  ],
+  deployProjectPushPage: [
+    {
+      tool: 'deployProjectPushPageExpand',
+      reason: '继续展开单条推包记录看详情',
+      priority: 2,
+      args: { body: { id: { source: ['payload', 'input'], path: ['list.0.id', 'id', 'data.0.id', 'body.id'] } } },
+    },
+    { tool: 'deployProjectPushGoon', reason: '继续推进失败的推包任务', priority: 1 },
+  ],
+  deployAppsInstall: [
+    {
+      tool: 'deployAppsViewHistory',
+      reason: '安装后先查看应用历史记录',
+      priority: 2,
+      args: { body: { appId: { source: ['payload', 'input'], path: ['appId', 'id', 'body.appId', 'body.id'] } } },
+    },
+    {
+      tool: 'deployAppsViewK8s',
+      reason: '安装后继续确认应用当前 K8s 资源',
+      priority: 1,
+      args: { body: { appId: { source: ['payload', 'input'], path: ['appId', 'id', 'body.appId', 'body.id'] } } },
+    },
+  ],
+  deployAppsUpgrade: [
+    {
+      tool: 'deployAppsViewHistory',
+      reason: '升级后先查看应用历史记录',
+      priority: 2,
+      args: { body: { appId: { source: ['payload', 'input'], path: ['appId', 'id', 'body.appId', 'body.id'] } } },
+    },
+    {
+      tool: 'deployAppsRollback',
+      reason: '如升级异常，可直接进入回滚链路',
+      priority: 1,
+      args: { body: { appId: { source: ['payload', 'input'], path: ['appId', 'id', 'body.appId', 'body.id'] } } },
+    },
+  ],
+  deployAppsRollback: [
+    {
+      tool: 'deployAppsViewHistory',
+      reason: '回滚后先确认应用历史记录是否更新',
+      priority: 2,
+      args: { body: { appId: { source: ['payload', 'input'], path: ['appId', 'body.appId', 'id'] } } },
+    },
+    {
+      tool: 'deployAppsViewK8s',
+      reason: '回滚后继续确认当前 K8s 资源状态',
+      priority: 1,
+      args: { body: { appId: { source: ['payload', 'input'], path: ['appId', 'body.appId', 'id'] } } },
+    },
+  ],
+  deployProjectDeploy: [
+    {
+      tool: 'deployProjectDeployPage',
+      reason: '部署后先查看部署历史记录',
+      priority: 2,
+      args: { body: { projectId: { source: ['payload', 'input'], path: ['projectId', 'id', 'body.projectId', 'body.id'] } } },
+    },
+    {
+      tool: 'deployProjectDeployPageExpand',
+      reason: '如果已返回 deployId，可直接展开部署详情',
+      priority: 1,
+      args: { body: { deployId: { source: ['payload', 'input'], path: ['deployId', 'id', 'body.deployId', 'body.id'] } } },
+    },
+  ],
+  deployProjectPush: [
+    {
+      tool: 'deployProjectPushPage',
+      reason: '推包后先查看推包历史记录',
+      priority: 2,
+    },
+    {
+      tool: 'deployProjectPushPageExpand',
+      reason: '如果已返回推包 ID，可直接展开推包详情',
+      priority: 1,
+      args: { body: { id: { source: ['payload', 'input'], path: ['pushId', 'id', 'body.id'] } } },
+    },
+    {
+      tool: 'deployProjectPushGoon',
+      reason: '如果推包未完成，可继续或中止该任务',
+      priority: 0,
+      args: { body: { id: { source: ['payload', 'input'], path: ['pushId', 'id', 'body.id'] } } },
+    },
+  ],
+  deployProjectPushGoon: [
+    {
+      tool: 'deployProjectPushPageExpand',
+      reason: '继续后先确认推包详情状态',
+      priority: 2,
+      args: { body: { id: { source: ['payload', 'input'], path: ['pushId', 'id', 'body.id'] } } },
+    },
+    {
+      tool: 'deployProjectPushPage',
+      reason: '回到推包历史列表继续排查',
+      priority: 1,
+    },
+  ],
+  iterVersionList: [
+    {
+      tool: 'iterVersionDetail',
+      reason: '继续查看某个版本详情',
+      priority: 2,
+      args: { body: { id: { source: ['payload', 'input'], path: ['list.0.id', 'id', 'data.0.id', 'body.id'] } } },
+    },
+    {
+      tool: 'iterVersionTestVersionList',
+      reason: '查看该版本相关提测记录',
+      priority: 1,
+      args: { body: { versionId: { source: ['payload', 'input'], path: ['list.0.id', 'id', 'data.0.id', 'body.id'] } } },
+    },
+    {
+      tool: 'iterHotfixList',
+      reason: '继续查看该版本的 hotfix 列表',
+      priority: 0,
+      args: { body: { versionId: { source: ['payload', 'input'], path: ['list.0.id', 'id', 'data.0.id', 'body.id'] } } },
+    },
+  ],
+  iterVersionDetail: [
+    {
+      tool: 'iterVersionEdit',
+      reason: '基于同一版本参数继续编辑版本',
+      priority: 2,
+      args: { body: { id: { source: ['payload', 'input'], path: ['id', 'body.id'] } } },
+    },
+    {
+      tool: 'iterVersionTestVersionList',
+      reason: '继续查看该版本的提测记录',
+      priority: 1,
+      args: { body: { versionId: { source: ['payload', 'input'], path: ['id', 'body.id'] } } },
+    },
+  ],
+  iterVersionAdd: [
+    {
+      tool: 'iterVersionDetail',
+      reason: '创建后先查看版本详情确认内容',
+      priority: 2,
+      args: { body: { id: { source: ['payload', 'input'], path: ['id', 'versionId', 'body.id'] } } },
+    },
+    {
+      tool: 'iterVersionTestVersionList',
+      reason: '继续进入该版本的提测管理',
+      priority: 1,
+      args: { body: { versionId: { source: ['payload', 'input'], path: ['id', 'versionId', 'body.id'] } } },
+    },
+    {
+      tool: 'deployProjectDeploy',
+      reason: '如果版本已确认，可继续发起部署',
+      priority: 0,
+    },
+  ],
+  iterVersionTestVersionSave: [
+    {
+      tool: 'iterVersionTestVersionList',
+      reason: '保存后先回到该版本的提测列表',
+      priority: 2,
+      args: { body: { versionId: { source: ['payload', 'input'], path: ['versionId', 'body.versionId'] } } },
+    },
+    {
+      tool: 'iterVersionTestVersionDetail',
+      reason: '如果已返回提测单 ID，可直接查看详情',
+      priority: 1,
+      args: { body: { id: { source: ['payload', 'input'], path: ['testVersionId', 'id', 'body.id'] } } },
+    },
+    {
+      tool: 'iterVersionTestVersionSubmit',
+      reason: '内容确认后继续提交提测单',
+      priority: 0,
+      args: { body: { id: { source: ['payload', 'input'], path: ['testVersionId', 'id', 'body.id'] } } },
+    },
+  ],
+  iterVersionTestVersionSubmit: [
+    {
+      tool: 'iterVersionTestVersionDetail',
+      reason: '提交后先查看提测单详情确认状态',
+      priority: 2,
+      args: { body: { id: { source: ['payload', 'input'], path: ['testVersionId', 'id', 'body.id'] } } },
+    },
+    {
+      tool: 'iterVersionTestVersionList',
+      reason: '回到提测列表继续查看当前版本记录',
+      priority: 1,
+      args: { body: { versionId: { source: ['payload', 'input'], path: ['versionId', 'body.versionId'] } } },
+    },
+    {
+      tool: 'iterVersionTestVersionCount',
+      reason: '继续统计当前版本提测单数量',
+      priority: 0,
+      args: { body: { versionId: { source: ['payload', 'input'], path: ['versionId', 'body.versionId'] } } },
+    },
+  ],
+  iterHotfixList: [
+    {
+      tool: 'iterHotfixDetail',
+      reason: '继续查看某个 hotfix 详情',
+      priority: 2,
+      args: { body: { id: { source: ['payload', 'input'], path: ['list.0.id', 'id', 'data.0.id', 'body.id'] } } },
+    },
+    {
+      tool: 'iterHotfixSave',
+      reason: '基于当前版本继续新增或修改 hotfix',
+      priority: 1,
+      args: { body: { versionId: { source: ['payload', 'input'], path: ['versionId', 'body.versionId'] } } },
+    },
+    {
+      tool: 'iterHotfixMerge',
+      reason: '继续处理 hotfix 合并动作',
+      priority: 0,
+      args: { body: { id: { source: ['payload', 'input'], path: ['id', 'body.id'] } } },
+    },
+  ],
+  iterHotfixSave: [
+    {
+      tool: 'iterHotfixDetail',
+      reason: '保存后先查看 hotfix 详情',
+      priority: 2,
+      args: { body: { id: { source: ['payload', 'input'], path: ['id', 'hotfixId', 'body.id'] } } },
+    },
+    {
+      tool: 'iterHotfixList',
+      reason: '回到该版本的 hotfix 列表继续处理',
+      priority: 1,
+      args: { body: { versionId: { source: ['payload', 'input'], path: ['versionId', 'body.versionId'] } } },
+    },
+    {
+      tool: 'iterHotfixMerge',
+      reason: '如果 hotfix 已完成，可继续合并',
+      priority: 0,
+      args: { body: { id: { source: ['payload', 'input'], path: ['id', 'hotfixId', 'body.id'] } } },
+    },
+  ],
+};
+
 function buildEndpointMetadata(endpoint: EndpointDefinition): CliCommandMetadata {
   const nextBestTools = (GROUP_RECOMMENDED_NEXT[endpoint.group] ?? []).filter((name) => name !== endpoint.name);
   return {
@@ -178,6 +461,7 @@ function buildEndpointMetadata(endpoint: EndpointDefinition): CliCommandMetadata
     examples: [buildEndpointExample(endpoint)],
     costHint: endpoint.mode === 'multipart' ? 'high' : endpoint.mode === 'none' ? 'low' : 'medium',
     nextBestTools: nextBestTools.length > 0 ? nextBestTools : undefined,
+    recommendations: ENDPOINT_RECOMMENDATIONS[endpoint.name],
   };
 }
 

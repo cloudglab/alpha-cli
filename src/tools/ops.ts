@@ -119,6 +119,21 @@ export function registerOpsTools(server: CliRegistry): void {
       ],
       costHint: 'high',
       nextBestTools: ['pushPkg', 'deployMaterialUpload', 'ciBuildParamsBuild'],
+      recommendations: [
+        {
+          tool: 'pushPkg',
+          reason: '下次可直接走一键推包链路',
+          priority: 0,
+          args: {
+            city: { source: 'payload', path: 'city' },
+          },
+        },
+        {
+          tool: 'deployMaterialUpload',
+          reason: '补充上传更多本地物料到 Alpha',
+          priority: -1,
+        },
+      ],
     },
   );
 }

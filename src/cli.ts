@@ -1,12 +1,13 @@
 import { InMemoryCliRegistry, parseCommandInput } from './core/cli-registry.js';
 import { formatCommandOutput, getBuiltinCommandHelp, printCommandHelp, printCommandList, printHelp } from './core/cli-output.js';
 import { normalizeImplicitSceneInvocation } from './core/devops-scene.js';
+import { resolveRecommendations } from './core/recommendations.js';
 import { runInstallCommand, runUninstallCommand, runUpdateCommand } from './install.js';
 import { registerTools } from './core/tool-registry.js';
 import { renderChangelog, type ChangelogOptions } from './core/changelog.js';
 import type { Role } from './types/common.js';
 import { CLI_VERSION } from './version.js';
-import { type OutputMode, setGlobalOutputMode } from './tools/shared.js';
+import { type OutputMode, setGlobalOutputMode, withToolMeta } from './tools/shared.js';
 
 const VALID_ROLES = new Set<Role>(['full', 'ci', 'deploy', 'iter', 'rbac', 'file', 'ops']);
 const VALID_OUTPUT_MODES = new Set<OutputMode>(['compact', 'normal', 'verbose']);
@@ -15,7 +16,7 @@ const BUILTIN_COMMAND_NAMES = ['help', 'list', 'version', 'install', 'uninstall'
 export async function runCli(rawArgs: string[]): Promise<void> {
   const parsedArgs = parseCliArgs(rawArgs);
   const implicitScene = normalizeImplicitSceneInvocation(parsedArgs.commandName, parsedArgs.commandArgs);
-  const { role, commandName, commandArgs, outputMode } = implicitScene
+  const { role, commandName, commandArgs, outputMode, recommend } = implicitScene
     ? { ...parsedArgs, ...implicitScene }
     : parsedArgs;
   setGlobalOutputMode(outputMode);
@@ -137,11 +138,12 @@ export async function runCli(rawArgs: string[]): Promise<void> {
   const input = parseCommandInput(command.schema, commandArgs);
   const result = await command.handler(input);
   const rawText = result.content[0]?.text ?? '';
+  const decoratedText = recommend ? injectRecommendations(rawText, { registry, commandName, input }) : rawText;
   // 仅在 compact 模式 + 交互式终端（TTY）下启用人类可读格式化；
   // 管道/脚本/AI（非 TTY）以及 normal/verbose 模式保持原始 JSON，避免破坏 JSON 消费者。
   const text = outputMode === 'compact' && process.stdout.isTTY
-    ? formatCommandOutput(command.name, rawText)
-    : rawText;
+    ? formatCommandOutput(command.name, decoratedText)
+    : decoratedText;
   process.stdout.write(`${text}\n`);
 }
 
@@ -151,10 +153,11 @@ async function buildRegistry(role: Role, commandName?: string): Promise<InMemory
   return registry;
 }
 
-function parseCliArgs(rawArgs: string[]): { role: Role; commandName?: string; commandArgs: string[]; outputMode: OutputMode } {
+function parseCliArgs(rawArgs: string[]): { role: Role; commandName?: string; commandArgs: string[]; outputMode: OutputMode; recommend: boolean } {
   const args = [...rawArgs];
   let role: Role = 'full';
   let outputMode: OutputMode = 'compact';
+  let recommend = false;
 
   for (let index = 0; index < args.length;) {
     const arg = args[index];
@@ -192,6 +195,25 @@ function parseCliArgs(rawArgs: string[]): { role: Role; commandName?: string; co
       continue;
     }
 
+    if (arg === '--recommend') {
+      const next = args[index + 1];
+      if (next === 'false') {
+        recommend = false;
+        args.splice(index, 2);
+        continue;
+      }
+      recommend = true;
+      args.splice(index, 1);
+      continue;
+    }
+
+    if (arg.startsWith('--recommend=')) {
+      const value = arg.slice('--recommend='.length).trim().toLowerCase();
+      recommend = !['false', '0', 'no', 'off'].includes(value);
+      args.splice(index, 1);
+      continue;
+    }
+
     index += 1;
   }
 
@@ -199,7 +221,32 @@ function parseCliArgs(rawArgs: string[]): { role: Role; commandName?: string; co
     role = args.shift() as Role;
   }
 
-  return { role, commandName: args.shift(), commandArgs: args, outputMode };
+  return { role, commandName: args.shift(), commandArgs: args, outputMode, recommend };
+}
+
+function injectRecommendations(
+  rawText: string,
+  options: { registry: InMemoryCliRegistry; commandName: string; input: Record<string, unknown> },
+): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    return rawText;
+  }
+
+  const command = options.registry.getCommand(options.commandName);
+  if (!command) return rawText;
+
+  const next = resolveRecommendations({
+    command,
+    commands: options.registry.listCommands(),
+    input: options.input,
+    payload: parsed,
+  });
+  if (next.length === 0) return rawText;
+
+  return JSON.stringify(withToolMeta(parsed, { next }));
 }
 
 function parseListOptions(args: string[]): { raw: boolean } {

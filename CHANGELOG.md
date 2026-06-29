@@ -2,7 +2,7 @@
 
 本文件记录 `@cloudglab/alpha-cli` 的用户可见变化。
 
-## [Unreleased]
+## [1.0.0] - 2026-06-29
 
 ### 变更
 

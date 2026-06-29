@@ -10,6 +10,19 @@ export interface CliCommandMetadata {
   examples?: string[];
   costHint?: 'low' | 'medium' | 'high';
   nextBestTools?: string[];
+  recommendations?: CliRecommendation[];
+}
+
+export interface CliRecommendationArgRef {
+  source: 'input' | 'payload' | Array<'input' | 'payload'>;
+  path: string | string[];
+}
+
+export interface CliRecommendation {
+  tool: string | CliRecommendationArgRef;
+  reason: string;
+  priority?: number;
+  args?: Record<string, unknown | CliRecommendationArgRef>;
 }
 
 export interface CliCommandDefinition {

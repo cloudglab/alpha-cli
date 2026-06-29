@@ -33,6 +33,18 @@ export function registerSceneTools(server: CliRegistry): void {
       ],
       costHint: 'low',
       nextBestTools: ['help', 'list'],
+      recommendations: [
+        {
+          tool: 'help',
+          reason: '先查看推荐命令的参数用法',
+          priority: 0,
+        },
+        {
+          tool: 'list',
+          reason: '查看当前 role 下全部可用命令',
+          priority: -1,
+        },
+      ],
     },
   );
 }

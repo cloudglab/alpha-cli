@@ -456,6 +456,32 @@ export function registerPushTools(server: CliRegistry): void {
       ],
       costHint: 'high',
       nextBestTools: ['ciBuildFind', 'ciBuildWait', 'opsPush', 'deployMaterialUpload'],
+      recommendations: [
+        {
+          tool: 'opsPush',
+          reason: '基于当前产物下载链接直接重新推送到目标城市',
+          priority: 2,
+          args: {
+            urls: { source: 'payload', path: 'downloadLinks' },
+            pkgName: { source: 'payload', path: 'pkgName' },
+            city: { source: 'payload', path: 'city' },
+            includeChart: { source: 'payload', path: 'includeChart' },
+          },
+        },
+        {
+          tool: 'ciBuildFind',
+          reason: '继续核对本次版本对应的构建记录',
+          priority: 1,
+          args: {
+            app: { source: 'input', path: 'versions.0' },
+          },
+        },
+        {
+          tool: 'deployMaterialUpload',
+          reason: '补充上传额外物料文件',
+          priority: 0,
+        },
+      ],
     },
   );
 }
