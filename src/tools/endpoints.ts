@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { CliCommandMetadata, CliRecommendation, CliRegistry } from '../core/cli-registry.js';
 import type { EndpointToolGroup } from '../core/roles.js';
+import { summarizeList } from '../core/list-summary.js';
 import { getApi } from '../core/api-provider.js';
 import { jsonResult, runWithPreview, withToolMeta } from './shared.js';
 
@@ -119,6 +120,63 @@ const writeEndpointSchema = {
   confirm: z.boolean().optional().default(false).describe('写操作必须传 confirm=true 才会真正执行；不传或 false 时只返回 preview。'),
 };
 
+const LIST_RESPONSE_KEYS = ['list', 'items', 'data', 'rows', 'records'] as const;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function toSummaryItems(items: unknown[]): Array<{ id: number | string; [key: string]: unknown }> {
+  return items.map((item, index) => {
+    if (isPlainObject(item)) {
+      const id = typeof item.id === 'number' || typeof item.id === 'string' ? item.id : index + 1;
+      return { id, ...item };
+    }
+
+    return { id: index + 1, name: String(item) };
+  });
+}
+
+function getListPayload(result: unknown): { items: unknown[]; container: Record<string, unknown> } | null {
+  if (Array.isArray(result)) return { items: result, container: {} };
+  if (!isPlainObject(result)) return null;
+
+  for (const key of LIST_RESPONSE_KEYS) {
+    const value = result[key];
+    if (Array.isArray(value)) return { items: value, container: result };
+  }
+
+  return null;
+}
+
+function decorateListResult(result: unknown): unknown {
+  const payload = getListPayload(result);
+  if (!payload) return result;
+
+  const summary = summarizeList(toSummaryItems(payload.items), { sortKey: 'deadline', groupKey: 'product' });
+  const total = payload.items.length;
+
+  if (Array.isArray(result)) {
+    return {
+      items: result,
+      summary,
+      meta: { processed: true, partial: false, total },
+    };
+  }
+
+  const record = result as Record<string, unknown>;
+  return {
+    ...record,
+    summary,
+    meta: {
+      ...(isPlainObject(record.meta) ? record.meta : {}),
+      processed: true,
+      partial: false,
+      total,
+    },
+  };
+}
+
 export function registerEndpointTools(server: CliRegistry, group?: EndpointToolGroup): void {
   for (const endpoint of ENDPOINTS) {
     if (group && endpoint.group !== group) continue;
@@ -141,7 +199,7 @@ export function registerEndpointTools(server: CliRegistry, group?: EndpointToolG
           mode: endpoint.mode ?? 'body',
           group: groupName,
         });
-        return jsonResult(decorated);
+        return jsonResult(decorateListResult(decorated));
       };
 
       if (!isWrite) return execute();

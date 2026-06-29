@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { CliRegistry } from '../core/cli-registry.js';
+import { summarizeList } from '../core/list-summary.js';
 import { getApi } from '../core/api-provider.js';
 import { jsonResult, withToolMeta } from './shared.js';
 
@@ -41,6 +42,13 @@ interface SelfBuildItem {
   name?: string;
   branch?: string;
   [key: string]: unknown;
+}
+
+function toSummaryItems(items: Array<Record<string, unknown>>): Array<{ id: number | string; [key: string]: unknown }> {
+  return items.map((item, index) => ({
+    id: typeof item.id === 'number' || typeof item.id === 'string' ? item.id : index + 1,
+    ...item,
+  }));
 }
 
 function pickBuild(record: BuildRecord | BranchSearchItem): BuildRecord {
@@ -359,8 +367,14 @@ export function registerCiOrchestratedTools(server: CliRegistry): void {
         withToolMeta(
           {
             builds: finalBuilds,
+            summary: summarizeList(toSummaryItems(finalBuilds), { sortKey: 'deadline', groupKey: 'product' }),
             count: finalBuilds.length,
             scannedRepos: repos.length,
+            meta: {
+              processed: true,
+              partial: false,
+              total: finalBuilds.length,
+            },
           },
           { source: 'ci-orchestrated', command: 'ciBuildRecent', method: 'aggregate', group: 'ci' },
         ),

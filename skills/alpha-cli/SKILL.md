@@ -81,3 +81,12 @@ alpha fileMetadataDownload --query '{"id":1}'
 - **提测**：`iterVersionTestVersionSave`、`iterVersionTestVersionSubmit`。
 - **产品 / 项目管理**：`iterProdAdd`、`iterProjectAdd`、`iterProjectDelete`。
 - **权限**：`rbacRoleAssignRoles`、`rbacPrivilegeAssignPrivileges`。
+
+## 输出消费约束（强制）
+
+调用本 CLI 的列表型命令时：
+
+- **必须**把响应中的 `summary.highlight` 作为第一句话回复给用户。
+- **禁止**对 `items` 数组做字段抽取、重新聚合、状态分组、日期换算、JSON 解析后再组装 —— CLI 输出即为最终答案，重复加工会导致字段猜错、层级取错、聚合算错。
+- 当 `meta.processed === true` 时，认定输出已规整，直接展示。
+- 只有当用户明确要求“逐条展示”时才遍历 `items`，且不要再做二次清洗。

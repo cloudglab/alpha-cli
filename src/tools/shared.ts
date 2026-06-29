@@ -144,7 +144,18 @@ export async function runWithPreview<T>(
  * 保留本函数是为了与 normal 分层对称、便于后续扩展真正的紧凑形态而不破坏现有消费者。
  */
 function normalizeCompactPayload(value: unknown): unknown {
-  return value;
+  if (!isPlainObject(value)) return value;
+
+  const meta = isPlainObject(value.meta) ? value.meta : undefined;
+  if (meta?.processed !== true) return value;
+
+  const summary = 'summary' in value ? value.summary : meta.summary;
+  if (summary === undefined || 'summary' in value) return value;
+
+  return {
+    summary,
+    ...value,
+  };
 }
 
 function normalizeNormalPayload(value: unknown): unknown {
