@@ -36,9 +36,11 @@
     "axios": "^1.13.2",
     "form-data": "^4.0.1",
     "ssh2": "^1.17.0",
+    "turndown": "^7.2.4",
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@types/turndown": "^5.0.6",
     "@types/node": "^20.19.25",
     "@types/ssh2": "^1.15.5",
     "@vitest/coverage-v8": "^4.1.8",

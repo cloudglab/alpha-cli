@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { JsonContentResult } from '../types/common.js';
+import { addMarkdownForAi } from '../utils/html-markdown.js';
 
 export type OutputMode = 'compact' | 'normal' | 'verbose';
 
@@ -14,11 +15,12 @@ export function jsonResult(value: unknown, mode?: OutputMode): JsonContentResult
   // compact 与 verbose 数据等价，仅影响 meta 字段聚合；compact 不会裁剪数据量。
   // 这里的 normal/compact 分层只决定是否把散落的 meta 字段收拢到 meta 对象。
   const effectiveMode = mode ?? currentOutputMode;
+  const aiReadyValue = addMarkdownForAi(value);
   const payload = effectiveMode === 'verbose'
-    ? value
+    ? aiReadyValue
     : effectiveMode === 'normal'
-      ? normalizeNormalPayload(value)
-      : normalizeCompactPayload(value);
+      ? normalizeNormalPayload(aiReadyValue)
+      : normalizeCompactPayload(aiReadyValue);
 
   return {
     content: [
