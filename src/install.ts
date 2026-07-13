@@ -532,23 +532,20 @@ async function captureCommandOutput(command: string, args: string[]): Promise<st
 
 async function ensureValidAlphaConfig(): Promise<void> {
   const { config: existing, error: loadError } = tryLoadConfig();
+  const isInteractive = process.stdin.isTTY && process.stdout.isTTY;
 
-  // 1. 已有配置且校验通过
-  if (existing && (await validateConfig(existing))) {
-    // 如果配置来自环境变量但磁盘上没有配置文件，落盘一份方便后续使用
-    if (!hasConfigFile()) {
-      saveConfig(existing);
-      process.stdout.write('\n已从环境变量生成配置文件 ~/.alpha/config.json\n');
+  // 1. 非交互环境：校验通过则落盘+返回，否则报错指引
+  if (!isInteractive) {
+    if (existing && (await validateConfig(existing))) {
+      if (!hasConfigFile()) {
+        saveConfig(existing);
+        process.stdout.write('\n已从环境变量生成配置文件 ~/.alpha/config.json\n');
+      }
+      process.stdout.write(`\nAlpha 配置校验通过：${JSON.stringify(maskConfig(existing))}\n`);
+      printEnvOverrideNotice();
+      return;
     }
-    process.stdout.write(`\nAlpha 配置校验通过：${JSON.stringify(maskConfig(existing))}\n`);
-    printEnvOverrideNotice();
-    return;
-  }
-
-  // 2. 非交互环境：给出明确指引而不是直接抛错
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
     if (existing) {
-      // 有配置（可能来自 env）但校验失败，先落盘再提示
       if (!hasConfigFile()) saveConfig(existing);
       throw new Error(
         'Alpha 配置校验失败（当前为非交互式终端，无法引导输入）。\n' +
@@ -564,8 +561,10 @@ async function ensureValidAlphaConfig(): Promise<void> {
     );
   }
 
-  // 3. 交互环境：提示并引导输入
-  if (existing) {
+  // 2. 交互环境：总是提示输入（已有配置作为默认值），落盘后再校验
+  if (existing && (await validateConfig(existing))) {
+    process.stdout.write('\n检测到已有 Alpha 配置且校验通过。如需修改请直接输入新值，回车保留原值。\n');
+  } else if (existing) {
     process.stdout.write('\n检测到已有 Alpha 配置，但登录校验失败，请重新输入。\n');
   } else if (loadError) {
     process.stdout.write(`\n检测到 Alpha 配置文件异常：${loadError.message}\n`);
