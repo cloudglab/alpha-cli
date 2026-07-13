@@ -202,7 +202,7 @@ export function opsPush(options: OpsPushOptions): Promise<OpsPushResult> {
 
     conn.on('ready', () => {
       onProgress('SSH连接已建立，正在请求PTY...');
-      conn.shell({ term: 'xterm-color' }, (err, stream) => {
+      conn.shell({ term: 'xterm-color' }, (err: Error | null, stream) => {
         if (err) {
           fail(`请求伪终端失败: ${err.message}`);
           return;
@@ -235,7 +235,7 @@ export function opsPush(options: OpsPushOptions): Promise<OpsPushResult> {
       });
     });
 
-    conn.on('error', (err) => fail(`SSH连接错误: ${err.message}`));
+    conn.on('error', (err: Error) => fail(`SSH连接错误: ${err.message}`));
     conn.on('timeout', () => fail('SSH连接超时'));
 
     conn.connect({
