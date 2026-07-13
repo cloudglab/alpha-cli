@@ -1,3 +1,4 @@
+import { runDailyUpdateProbe } from './update-probe.js';
 import { InMemoryCliRegistry, parseCommandInput } from './core/cli-registry.js';
 import { formatCommandOutput, getBuiltinCommandHelp, printCommandHelp, printCommandList, printHelp } from './core/cli-output.js';
 import { normalizeImplicitSceneInvocation } from './core/devops-scene.js';
@@ -8,6 +9,7 @@ import { renderChangelog, type ChangelogOptions } from './core/changelog.js';
 import type { Role } from './types/common.js';
 import { CLI_VERSION } from './version.js';
 import { type OutputMode, setGlobalOutputMode, withToolMeta } from './tools/shared.js';
+import { getRequestCount, getLastRequestDurationMs } from './core/http-metrics.js';
 
 const VALID_ROLES = new Set<Role>(['full', 'ci', 'deploy', 'iter', 'rbac', 'file', 'ops']);
 const VALID_OUTPUT_MODES = new Set<OutputMode>(['compact', 'normal', 'verbose']);
@@ -135,10 +137,13 @@ export async function runCli(rawArgs: string[]): Promise<void> {
     return;
   }
 
+  await runDailyUpdateProbe(commandName);
   const input = parseCommandInput(command.schema, commandArgs);
+  const requestCountBefore = getRequestCount();
   const result = await command.handler(input);
   const rawText = result.content[0]?.text ?? '';
-  const decoratedText = recommend ? injectRecommendations(rawText, { registry, commandName, input }) : rawText;
+  const metaText = appendCommandMeta(rawText, requestCountBefore);
+  const decoratedText = recommend ? injectRecommendations(metaText, { registry, commandName, input }) : metaText;
   // 仅在 compact 模式 + 交互式终端（TTY）下启用人类可读格式化；
   // 管道/脚本/AI（非 TTY）以及 normal/verbose 模式保持原始 JSON，避免破坏 JSON 消费者。
   const text = outputMode === 'compact' && process.stdout.isTTY
@@ -221,6 +226,11 @@ function parseCliArgs(rawArgs: string[]): { role: Role; commandName?: string; co
     role = args.shift() as Role;
   }
 
+  // 支持 `alpha who am i` 三段写法，合并为 whoami
+  if (args[0] === 'who' && args[1] === 'am' && args[2] === 'i') {
+    args.splice(0, 3, 'whoami');
+  }
+
   return { role, commandName: args.shift(), commandArgs: args, outputMode, recommend };
 }
 
@@ -247,6 +257,21 @@ function injectRecommendations(
   if (next.length === 0) return rawText;
 
   return JSON.stringify(withToolMeta(parsed, { next }));
+}
+
+function appendCommandMeta(text: string, requestCountBefore: number): string {
+  try {
+    const payload = JSON.parse(text) as Record<string, unknown>;
+    const requestCountAfter = getRequestCount();
+    payload.meta = {
+      ...(typeof payload.meta === 'object' && payload.meta !== null ? payload.meta as Record<string, unknown> : {}),
+      requestCount: Math.max(requestCountAfter - requestCountBefore, 0),
+      durationMs: getLastRequestDurationMs(),
+    };
+    return JSON.stringify(payload);
+  } catch {
+    return text;
+  }
 }
 
 function parseListOptions(args: string[]): { raw: boolean } {

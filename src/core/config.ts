@@ -80,6 +80,9 @@ export function loadConfig(): AlphaConfig | null {
 
   const hasAnyEnvOverride = Object.values(envConfig).some((value) => value !== undefined && value !== '');
 
+  const hasCompleteEnvConfig = Boolean(envConfig.url && (envConfig.token || (envConfig.username && envConfig.password)));
+  if (hasCompleteEnvConfig) return normalizeConfig(envConfig);
+
   if (!existsSync(CONFIG_FILE)) {
     if (existsSync(LEGACY_CONFIG_FILE)) {
       const raw = readConfigFile(LEGACY_CONFIG_FILE);
@@ -156,6 +159,14 @@ export function saveConfig(config: AlphaConfig): void {
   const normalized = normalizeConfig(config);
   if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   writeFileSync(CONFIG_FILE, `${JSON.stringify(normalized, null, 2)}\n`, { mode: 0o600 });
+}
+
+/**
+ * 检查配置文件是否存在于磁盘（~/.alpha/config.json 或旧版 ~/.alpha-cli/config.json）。
+ * 用于 install 流程判断是否需要从环境变量落盘。
+ */
+export function hasConfigFile(): boolean {
+  return existsSync(CONFIG_FILE) || existsSync(LEGACY_CONFIG_FILE);
 }
 
 function readConfigFile(filePath: string = CONFIG_FILE): Partial<AlphaConfig> {

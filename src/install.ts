@@ -4,8 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { AlphaApi } from './api/index.js';
-import { loadConfig, maskConfig, normalizeConfig, saveConfig } from './core/config.js';
+import { hasConfigFile, loadConfig, maskConfig, normalizeConfig, saveConfig } from './core/config.js';
 import type { AlphaConfig } from './types/common.js';
+import { writeUpdateCacheAfterInstall } from './update-probe.js';
 
 const PACKAGE_NAME = '@cloudglab/alpha-cli';
 const CLI_COMMAND = 'alpha';
@@ -33,6 +34,7 @@ interface UninstallOptions {
 export async function runInstallCommand(args: string[] = []): Promise<void> {
   const options = parseInstallOptions(args);
   await installPackageAndSkill('安装', options);
+  await writeUpdateCacheAfterInstall();
   if (options.skipConfigCheck) {
     printSuccessGuide('安装', '已跳过 Alpha 配置校验。');
     return;
@@ -44,6 +46,7 @@ export async function runInstallCommand(args: string[] = []): Promise<void> {
 export async function runUpdateCommand(args: string[] = []): Promise<void> {
   const options = parseInstallOptions(args);
   await installPackageAndSkill('更新', options);
+  await writeUpdateCacheAfterInstall();
   if (options.skipConfigCheck) {
     printSuccessGuide('更新', '已跳过 Alpha 配置校验。');
     return;
@@ -82,6 +85,7 @@ function printSuccessGuide(action: '安装' | '更新', status: string): void {
 快速开始：
   ${CLI_COMMAND} help                    查看帮助
   ${CLI_COMMAND} list                    查看可用命令
+  ${CLI_COMMAND} whoami                  校验当前 Alpha 账号
   ${CLI_COMMAND} --output verbose getAlphaConfig  查看完整配置
   ${CLI_COMMAND} healthHealthPing        检查服务状态
 
@@ -528,26 +532,59 @@ async function captureCommandOutput(command: string, args: string[]): Promise<st
 
 async function ensureValidAlphaConfig(): Promise<void> {
   const { config: existing, error: loadError } = tryLoadConfig();
+
+  // 1. 已有配置且校验通过
   if (existing && (await validateConfig(existing))) {
+    // 如果配置来自环境变量但磁盘上没有配置文件，落盘一份方便后续使用
+    if (!hasConfigFile()) {
+      saveConfig(existing);
+      process.stdout.write('\n已从环境变量生成配置文件 ~/.alpha/config.json\n');
+    }
     process.stdout.write(`\nAlpha 配置校验通过：${JSON.stringify(maskConfig(existing))}\n`);
     printEnvOverrideNotice();
     return;
   }
 
+  // 2. 非交互环境：给出明确指引而不是直接抛错
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    if (existing) {
+      // 有配置（可能来自 env）但校验失败，先落盘再提示
+      if (!hasConfigFile()) saveConfig(existing);
+      throw new Error(
+        'Alpha 配置校验失败（当前为非交互式终端，无法引导输入）。\n' +
+        '请检查 ALPHA_URL / ALPHA_TOKEN / ALPHA_USERNAME / ALPHA_PASSWORD 是否正确，\n' +
+        '或安装完成后运行：alpha initAlpha --url https://host --token xxx --save true',
+      );
+    }
+    if (loadError) throw loadError;
+    throw new Error(
+      '未检测到 Alpha 配置（当前为非交互式终端，无法引导输入）。\n' +
+      '请先设置环境变量 ALPHA_URL 和 ALPHA_TOKEN（或 ALPHA_USERNAME + ALPHA_PASSWORD），\n' +
+      '或安装完成后运行：alpha initAlpha --url https://host --token xxx --save true',
+    );
+  }
+
+  // 3. 交互环境：提示并引导输入
   if (existing) {
     process.stdout.write('\n检测到已有 Alpha 配置，但登录校验失败，请重新输入。\n');
   } else if (loadError) {
     process.stdout.write(`\n检测到 Alpha 配置文件异常：${loadError.message}\n`);
-    if (!process.stdin.isTTY || !process.stdout.isTTY) {
-      throw loadError;
-    }
   } else {
     process.stdout.write('\n未检测到可用 Alpha 配置，请输入配置。\n');
   }
 
   const config = await promptForConfig(existing ?? undefined);
-  await validateConfigOrThrow(config);
+  // 先落盘，避免校验失败时丢失用户输入
   saveConfig(config);
+  try {
+    await validateConfigOrThrow(config);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stdout.write(`\n配置已保存到 ~/.alpha/config.json，但校验失败：${message}\n`);
+    process.stdout.write('请检查地址和凭据是否正确，可重新运行：alpha initAlpha --url https://host --token xxx --save true\n');
+    printEnvOverrideNotice();
+    return;
+  }
   process.stdout.write(`已保存 Alpha 配置：${JSON.stringify(maskConfig(config))}\n`);
   printEnvOverrideNotice();
 }

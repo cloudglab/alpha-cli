@@ -24,6 +24,8 @@ export interface EndpointDefinition {
 // 该白名单已与后端确认只读；新增只读 POST 接口时请同步维护，并在 EndpointDefinition.readonly 标记 true。
 const READ_ENDPOINT_NAMES: ReadonlySet<string> = new Set([
   'userinfo',
+  'whoami',
+  'who-am-i',
   'uid',
   'healthHealthPing',
   'testApi',
@@ -542,6 +544,8 @@ export const ENDPOINTS: EndpointDefinition[] = [
   { group: 'root', name: 'healthHealthPing', method: 'GET', path: '/health/health/ping', mode: 'none', readonly: true },
   { group: 'root', name: 'login', method: 'POST', path: '/alpha/login', request: 'LoginReq', mode: 'body' },
   { group: 'root', name: 'userinfo', method: 'POST', path: '/alpha/userinfo', mode: 'none', readonly: true },
+  { group: 'root', name: 'whoami', method: 'POST', path: '/alpha/userinfo', mode: 'none', readonly: true },
+  { group: 'root', name: 'who-am-i', method: 'POST', path: '/alpha/userinfo', mode: 'none', readonly: true },
   { group: 'root', name: 'uid', method: 'POST', path: '/alpha/uid', request: 'JsonNode', mode: 'body', readonly: true },
   { group: 'root', name: 'logout', method: 'POST', path: '/alpha/logout', mode: 'none' },
   { group: 'root', name: 'testApi', method: 'GET', path: '/alpha/test-api', mode: 'none', readonly: true },

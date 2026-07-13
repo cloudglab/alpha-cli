@@ -10,6 +10,8 @@ export const commandToGroup: Record<string, string> = {
   "testApi": "root",
   "uid": "root",
   "userinfo": "root",
+  "who-am-i": "root",
+  "whoami": "root",
   "ciAppSync": "ci",
   "ciBranchList": "ci",
   "ciBranchSearch": "ci",
@@ -156,7 +158,9 @@ export const groupCommands: Record<string, string[]> = {
     "logout",
     "testApi",
     "uid",
-    "userinfo"
+    "userinfo",
+    "who-am-i",
+    "whoami"
   ],
   "ci": [
     "ciAppSync",

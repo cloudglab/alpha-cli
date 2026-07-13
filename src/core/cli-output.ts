@@ -30,6 +30,7 @@ export function printHelp(role: Role, commands: CliCommandDefinition[]): void {
     '',
     '快速开始：',
     '  alpha initAlpha --url https://host --token xxx --save true',
+    '  alpha whoami                                 校验当前 Alpha 账号',
     '  alpha devopsScene --input https://host/main/devops/iteration/list',
     '  alpha list                                    查看当前 role 可用命令（按场景分组）',
     '  alpha help <command>                          查看命令参数和示例',
@@ -39,7 +40,7 @@ export function printHelp(role: Role, commands: CliCommandDefinition[]): void {
     'AI 友好提示：',
     '  - compact / normal / verbose 都不会裁剪数据；三者数据等价，仅影响 meta 字段聚合与人类可读格式化',
     '  - 传 --recommend 后，会在 JSON 的 meta.next 注入结构化下一步推荐，适合 Agent / 脚本串联',
-    '  - 交互式终端 + compact 模式下，healthHealthPing / userinfo / getAlphaConfig / iterGetTree 会输出人类可读摘要；管道/脚本/AI 与 normal/verbose 返回原始 JSON',
+    '  - 交互式终端 + compact 模式下，healthHealthPing / whoami / userinfo / getAlphaConfig / iterGetTree 会输出人类可读摘要；管道/脚本/AI 与 normal/verbose 返回原始 JSON',
     '  - 写命令（deploy*、ciBuildCancel、iterHotfixMerge 等）会通过 meta 给出 confirm 提示',
     '  - 场景识别支持 devops URL / 路由 / 页面路径，先输出 matchedServer、routeKind、params 再决定后续命令',
     '  - 未知参数会直接报错并列出所有支持参数，避免 AI 试错',
@@ -335,6 +336,7 @@ function buildScenarioGroups(commands: CliCommandDefinition[]): Map<string, Arra
 function getRecommendedCommands(commands: CliCommandDefinition[]): Array<{ name: string; description: string }> {
   const names = new Set(commands.map((command) => command.name));
   const candidates = [
+    { name: 'whoami', description: '校验当前 Alpha 账号' },
     { name: 'devopsScene', description: '识别 devops 浏览器上下文并给出命令建议' },
     { name: 'initAlpha', description: '初始化 Alpha 连接配置' },
     { name: 'getAlphaConfig', description: '查看当前 Alpha 配置' },
@@ -350,8 +352,9 @@ function getRecommendedCommands(commands: CliCommandDefinition[]): Array<{ name:
 export function formatCommandOutput(commandName: string, text: string): string {
   switch (commandName) {
     case 'healthHealthPing':
-      return formatHealthPing(text);
     case 'userinfo':
+    case 'whoami':
+    case 'who-am-i':
       return formatUserInfo(text);
     case 'getAlphaConfig':
       return formatAlphaConfig(text);
@@ -375,7 +378,7 @@ function formatHealthPing(text: string): string {
       `  状态：${status}`,
       uptimeHint ? `  ${uptimeHint}` : '',
       '下一步：',
-      '  - 校验账号：alpha userinfo',
+      '  - 校验账号：alpha whoami',
       '  - 查看配置：alpha getAlphaConfig',
     ].filter(Boolean).join('\n');
   }

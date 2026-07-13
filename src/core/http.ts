@@ -6,6 +6,7 @@ import axios, { type AxiosError, type AxiosInstance, type AxiosRequestConfig } f
 import FormData from 'form-data';
 import type { AlphaConfig } from '../types/common.js';
 import { sanitizeJsonLikeResponse } from '../utils/json.js';
+import { recordRequestStarted, recordRequestFinished } from './http-metrics.js';
 
 export interface AlphaRequestOptions {
   body?: unknown;
@@ -46,6 +47,7 @@ export class AlphaHttpClient {
   private readonly httpsAgent: https.Agent;
   private cookieHeader?: string;
   private tokenBlacklist = new Set<string>();
+  private static readonly MAX_CACHE_ENTRIES = 50;
   private readonly responseCache = new Map<string, CacheEntry>();
 
   constructor(private readonly config: AlphaConfig) {
@@ -83,7 +85,7 @@ export class AlphaHttpClient {
     const cached = this.readCache<T>(cacheKey);
     if (cached !== undefined) return cached;
 
-    await this.ensureLogin(url);
+    await this.ensureLogin(url, retried);
 
     const requestConfig: AxiosRequestConfig = {
       method,
@@ -109,7 +111,10 @@ export class AlphaHttpClient {
     }
 
     try {
+      recordRequestStarted();
+      const requestStartTime = Date.now();
       const response = await this.client.request(requestConfig);
+      recordRequestFinished(Date.now() - requestStartTime);
       this.captureCookie(response.headers['set-cookie']);
       const normalized = sanitizeJsonLikeResponse(response.data) as T;
       this.writeCache(cacheKey, method, normalized);
@@ -120,21 +125,25 @@ export class AlphaHttpClient {
           // 401 重试前必须清空缓存与登录态，否则重试会命中过期缓存/旧 cookie 而绕过重新鉴权。
           this.invalidateToken();
           this.clearAuthAndCache();
-          // 纯 token 模式（无 username/password）：token 失效后无法重新登录，
-          // 重试一次必然再次 401，不如直接给出明确提示，避免静默失败。
-          if (!this.config.username || !this.config.password) {
-            throw buildAlphaHttpError(error, this.config, {
-              hint: 'Token 已过期且未配置账号密码，无法自动重新登录。请运行 `alpha initAlpha --token <new-token> --save true` 重置 token 后重试。',
-            });
-          }
           return this.requestWithRetry<T>(method, url, options, true);
+        }
+        if (retried && error.response?.status === 401) {
+          throw buildAlphaHttpError(error, this.config, {
+            hint: 'Token 已过期或凭据无效。请运行 `alpha initAlpha --token <new-token> --save true` 重置后重试。',
+          });
         }
         if (!retried && isRetryableNetworkError(error)) {
           return this.requestWithRetry<T>(method, url, options, true);
         }
         throw buildAlphaHttpError(error, this.config);
       }
-      throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      const wrapped = new Error(`请求 ${method} ${url} 发生非 HTTP 异常：${message}`) as AlphaHttpError;
+      wrapped.statusCode = undefined;
+      wrapped.responseBody = undefined;
+      wrapped.url = url;
+      wrapped.code = 'unknown';
+      throw wrapped;
     }
   }
 
@@ -148,7 +157,7 @@ export class AlphaHttpClient {
     return headers;
   }
 
-  private async ensureLogin(url: string): Promise<void> {
+  private async ensureLogin(url: string, retried = false): Promise<void> {
     if (this.cookieHeader || !this.config.username || !this.config.password || url === '/alpha/login') return;
 
     try {
@@ -167,9 +176,18 @@ export class AlphaHttpClient {
       // 登录失败时清空可能残留的 cookie，避免后续请求带半截失效 cookie 继续失败。
       this.cookieHeader = undefined;
       if (axios.isAxiosError(error)) {
+        if (!retried && isRetryableNetworkError(error)) {
+          return this.ensureLogin(url, true);
+        }
         throw buildAlphaLoginError(error, this.config);
       }
-      throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      const wrapped = new Error(`请求 POST /alpha/login 发生非 HTTP 异常：${message}`) as AlphaHttpError;
+      wrapped.statusCode = undefined;
+      wrapped.responseBody = undefined;
+      wrapped.url = '/alpha/login';
+      wrapped.code = 'unknown';
+      throw wrapped;
     }
   }
 
@@ -215,6 +233,10 @@ export class AlphaHttpClient {
 
   private writeCache(key: string | undefined, method: string, value: unknown): void {
     if (!key || method.toUpperCase() !== 'GET') return;
+    if (this.responseCache.size >= AlphaHttpClient.MAX_CACHE_ENTRIES) {
+      const firstKey = this.responseCache.keys().next().value;
+      if (firstKey) this.responseCache.delete(firstKey);
+    }
     this.responseCache.set(key, { expiresAt: Date.now() + GET_CACHE_TTL_MS, value });
   }
 }
