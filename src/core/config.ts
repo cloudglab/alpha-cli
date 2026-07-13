@@ -34,6 +34,7 @@ export function normalizeConfig(config: Partial<AlphaConfig>): AlphaConfig {
     username: normalizeOptionalText(config.username),
     password: normalizeOptionalText(config.password),
     timeoutMs: normalizeTimeoutMs(config.timeoutMs) ?? 30_000,
+    insecure: config.insecure === true,
     ops: normalizeOpsConfig(config.ops),
     // sshUser/sshPass 不落盘，仅从环境变量或运行时入参传入；normalize 时保留运行时入参
     sshUser: normalizeOptionalText(config.sshUser),
@@ -76,6 +77,7 @@ export function loadConfig(): AlphaConfig | null {
     sshUser: normalizeOptionalEnvValue(process.env.ALPHA_SSH_USER),
     sshPass: normalizeOptionalEnvValue(process.env.ALPHA_SSH_PASS),
     ops: loadOpsEnvConfig(),
+    insecure: process.env.ALPHA_INSECURE === undefined ? undefined : process.env.ALPHA_INSECURE === 'true',
   };
 
   const hasAnyEnvOverride = Object.values(envConfig).some((value) => value !== undefined && value !== '');

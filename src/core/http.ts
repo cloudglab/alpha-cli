@@ -52,7 +52,7 @@ export class AlphaHttpClient {
 
   constructor(private readonly config: AlphaConfig) {
     this.httpAgent = new http.Agent({ keepAlive: true });
-    this.httpsAgent = new https.Agent({ keepAlive: true });
+    this.httpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: !config.insecure });
     this.client = axios.create({
       baseURL: config.url,
       timeout: config.timeoutMs,

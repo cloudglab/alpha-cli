@@ -29,6 +29,8 @@ export interface AlphaConfig {
   username?: string;
   password?: string;
   timeoutMs: number;
+  /** 是否跳过 TLS 证书校验（内网自签证书），默认 false */
+  insecure?: boolean;
   /** 运维操作配置段，可选 */
   ops?: OpsConfig;
   /** SSH 账号（仅来自环境变量或运行时，不落盘） */

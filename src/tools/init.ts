@@ -25,6 +25,7 @@ export function registerInitTools(server: CliRegistry): void {
       password: optionalTrimmedText.describe('密码，可选。'),
       timeoutMs: z.number().int().positive().optional().describe('请求超时时间，单位毫秒。'),
       save: z.boolean().default(false).describe('是否写入本机配置文件。'),
+      insecure: z.boolean().optional().default(false).describe('是否跳过 TLS 证书校验（内网自签证书）。'),
     },
     async (input) => {
       // save=true 时至少校验 url 合法性再落盘，避免把畸形地址写进 config.json。
@@ -35,6 +36,7 @@ export function registerInitTools(server: CliRegistry): void {
         username: input.username,
         password: input.password,
         timeoutMs: input.timeoutMs ?? 30_000,
+        insecure: input.insecure,
       });
       if (input.save) saveConfig(config);
       return jsonResult({ ok: true, saved: input.save, config: maskConfig(config) });

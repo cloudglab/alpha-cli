@@ -645,6 +645,8 @@ async function promptForConfig(defaults?: AlphaConfig): Promise<AlphaConfig> {
     if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
       throw new Error(`timeoutMs 必须是正整数，收到: ${timeoutStr}`);
     }
+    const insecureStr = await ask(rl, '是否跳过 TLS 证书校验（内网自签证书）(yes/no)', defaults?.insecure ? 'yes' : 'no');
+    const insecure = insecureStr.toLowerCase() === 'yes' || insecureStr.toLowerCase() === 'true';
 
     return normalizeConfig({
       url,
@@ -652,6 +654,7 @@ async function promptForConfig(defaults?: AlphaConfig): Promise<AlphaConfig> {
       username: username || undefined,
       password: password || defaults?.password,
       timeoutMs,
+      insecure,
     });
   } finally {
     rl.close();
