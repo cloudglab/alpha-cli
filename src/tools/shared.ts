@@ -40,6 +40,24 @@ export function getGlobalOutputMode(): OutputMode {
   return currentOutputMode;
 }
 
+/**
+ * 解包 Alpha API 的 {errno, data} envelope。
+ * 手写工具（ci-orchestrated / push）直接调 getApi().request()，
+ * 返回的是整个响应体 {errno, data, cost, ...}，不是 data 本身。
+ * 此 helper 安全提取 .data；非 envelope 响应原样返回。
+ */
+export function unwrapAlphaResponse<T = unknown>(response: unknown): T {
+  if (
+    response !== null &&
+    typeof response === 'object' &&
+    'errno' in response &&
+    'data' in (response as Record<string, unknown>)
+  ) {
+    return (response as unknown as { data: T }).data;
+  }
+  return response as T;
+}
+
 export function withToolMeta(value: unknown, meta: Record<string, unknown>): unknown {
   if (!isPlainObject(value)) return value;
 

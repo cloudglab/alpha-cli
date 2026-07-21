@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { CliRegistry } from '../core/cli-registry.js';
 import { summarizeList } from '../core/list-summary.js';
 import { getApi } from '../core/api-provider.js';
-import { jsonResult, withToolMeta } from './shared.js';
+import { jsonResult, withToolMeta, unwrapAlphaResponse } from './shared.js';
 
 // 与后端 APP_REGEX = ^([0-9a-z-]+):([0-9]+\.[0-9]+\.[0-9]+-[0-9]+)$ 保持一致
 const APP_REGEX = /^([0-9a-z-]+):(\d+\.\d+\.\d+-\d+)$/;
@@ -110,9 +110,11 @@ export function registerCiOrchestratedTools(server: CliRegistry): void {
       const [, appName, version] = app.match(APP_REGEX) as RegExpMatchArray;
 
       if (typeof repoId === 'number') {
-        const response = (await getApi().request('POST', '/alpha/ci/build/list', {
-          body: { repoId, branch: branch ?? '', version, page: 1, count: 10 },
-        })) as BuildListResponse;
+        const response = unwrapAlphaResponse<BuildListResponse>(
+          await getApi().request('POST', '/alpha/ci/build/list', {
+            body: { repoId, branch: branch ?? '', version, page: 1, count: 10 },
+          }),
+        );
         const candidates = Array.isArray(response?.list) ? response.list : [];
         const matched = candidates.filter((item) => {
           if (item.version !== version) return false;
@@ -139,9 +141,11 @@ export function registerCiOrchestratedTools(server: CliRegistry): void {
         );
       }
 
-      const branchSearch = (await getApi().request('POST', '/alpha/ci/branch/search', {
-        body: { appList: [app] },
-      })) as BranchSearchItem[];
+      const branchSearch = unwrapAlphaResponse<BranchSearchItem[]>(
+        await getApi().request('POST', '/alpha/ci/branch/search', {
+          body: { appList: [app] },
+        }),
+      );
       const list = Array.isArray(branchSearch) ? branchSearch : [];
 
       const matched = list
@@ -231,9 +235,11 @@ export function registerCiOrchestratedTools(server: CliRegistry): void {
 
       try {
         while (true) {
-          const response = (await getApi().request('POST', '/alpha/ci/build/list', {
-            body: { repoId, branch, page: 1, count: 20 },
-          })) as BuildListResponse;
+          const response = unwrapAlphaResponse<BuildListResponse>(
+            await getApi().request('POST', '/alpha/ci/build/list', {
+              body: { repoId, branch, page: 1, count: 20 },
+            }),
+          );
           const list = Array.isArray(response?.list) ? response.list : [];
 
           const target = typeof buildId === 'number'
@@ -318,7 +324,9 @@ export function registerCiOrchestratedTools(server: CliRegistry): void {
       statusFilter: z.array(z.string()).optional().describe('可选,只保留这些状态,例如 --statusFilter process --statusFilter success。'),
     },
     async ({ excludeJobGlab, statusFilter }) => {
-      const selfBuild = (await getApi().request('POST', '/alpha/ci/build/getSelfBuild', {})) as SelfBuildItem[];
+      const selfBuild = unwrapAlphaResponse<SelfBuildItem[]>(
+        await getApi().request('POST', '/alpha/ci/build/getSelfBuild', {}),
+      );
       const repos = Array.isArray(selfBuild) ? selfBuild : [];
 
       const filteredRepos = excludeJobGlab
@@ -329,9 +337,11 @@ export function registerCiOrchestratedTools(server: CliRegistry): void {
       for (const repo of filteredRepos) {
         const repoIdNum = Number(repo.id);
         const branch = typeof repo.branch === 'string' ? repo.branch : '';
-        const response = (await getApi().request('POST', '/alpha/ci/build/list', {
-          body: { repoId: repoIdNum, branch, page: 1, count: 5 },
-        })) as BuildListResponse;
+        const response = unwrapAlphaResponse<BuildListResponse>(
+          await getApi().request('POST', '/alpha/ci/build/list', {
+            body: { repoId: repoIdNum, branch, page: 1, count: 5 },
+          }),
+        );
         const list = Array.isArray(response?.list) ? response.list : [];
 
         const processBuild = list.find((item) => item.status === 'process');

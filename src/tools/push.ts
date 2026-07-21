@@ -3,7 +3,7 @@ import axios from 'axios';
 import type { CliRegistry } from '../core/cli-registry.js';
 import { getApi } from '../core/api-provider.js';
 import { opsPush, type OpsPushResult } from '../core/ssh.js';
-import { jsonResult, runWithPreview, withToolMeta } from './shared.js';
+import { jsonResult, runWithPreview, withToolMeta, unwrapAlphaResponse } from './shared.js';
 
 export const PUSH_COMMAND_NAMES: readonly string[] = ['pushPkg'];
 
@@ -107,9 +107,11 @@ async function waitForBuild(
   try {
     while (true) {
       attempt += 1;
-      const response = (await getApi().request('POST', '/alpha/ci/build/list', {
-        body: { repoId, branch, page: 1, count: 20 },
-      })) as BuildListResponse;
+      const response = unwrapAlphaResponse<BuildListResponse>(
+        await getApi().request('POST', '/alpha/ci/build/list', {
+          body: { repoId, branch, page: 1, count: 20 },
+        }),
+      );
       const list = Array.isArray(response?.list) ? response.list : [];
       const target = list.find((item) => Number(item.id) === buildId);
 
@@ -149,9 +151,11 @@ async function triggerBuild(
   onProgress?: (text: string) => void,
 ): Promise<number> {
   onProgress?.(`[${label}] 触发 paramsBuild: repoId=${repoId} branch=${branch}`);
-  const response = (await getApi().request('POST', '/alpha/ci/build/paramsBuild', {
-    body: { branch, repoId, rules },
-  })) as ParamsBuildResponse;
+  const response = unwrapAlphaResponse<ParamsBuildResponse>(
+    await getApi().request('POST', '/alpha/ci/build/paramsBuild', {
+      body: { branch, repoId, rules },
+    }),
+  );
   const rawId = response?.buildId ?? response?.id;
   const buildId = Number(rawId);
   if (!Number.isFinite(buildId) || buildId <= 0) {
@@ -264,9 +268,11 @@ async function uploadLocalMaterial(
   city: string,
   now: Date,
 ): Promise<MaterialEntry> {
-  const uploadResp = (await getApi().request('POST', '/alpha/deploy/material/upload', {
-    files: [path],
-  })) as MaterialUploadResponse;
+  const uploadResp = unwrapAlphaResponse<MaterialUploadResponse>(
+    await getApi().request('POST', '/alpha/deploy/material/upload', {
+      files: [path],
+    }),
+  );
   const fileId = uploadResp?.fileId ?? uploadResp?.id;
   if (typeof fileId !== 'string' || fileId.length === 0) {
     throw new Error(`material/upload 未返回 fileId: ${JSON.stringify(uploadResp)}`);
@@ -313,7 +319,9 @@ export function registerPushTools(server: CliRegistry): void {
           }
         };
 
-        const repoList = (await getApi().request('POST', '/alpha/ci/repo/list', {})) as RepoListItem[];
+        const repoList = unwrapAlphaResponse<RepoListItem[]>(
+          await getApi().request('POST', '/alpha/ci/repo/list', {}),
+        );
         const repos = Array.isArray(repoList) ? repoList : [];
         const chartsRepoId = resolveRepoId(repos, CHARTS_REPO_NAME, CHARTS_REPO_FALLBACK_ID);
         const imagesRepoId = resolveRepoId(repos, IMAGES_REPO_NAME, IMAGES_REPO_FALLBACK_ID);
